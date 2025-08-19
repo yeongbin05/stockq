@@ -17,8 +17,27 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path,include
 
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def health(request):
+    return Response({"status": "ok"})
+
+# ↓ 추가: 인증 확인용 핑 (전역 IsAuthenticated 적용됨)
+@api_view(["GET"])
+def ping(request):
+    return Response({"message": "pong", "user": request.user.username})
+
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+
+    path("api/health/", health),   # 공개
+    path("api/ping/", ping),       # 인증 필요
+
     path('api/users/', include('users.urls')),
     path('api/', include('news.urls')),
     path('api/stocks/', include('stocks.urls')),

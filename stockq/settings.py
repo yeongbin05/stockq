@@ -49,7 +49,18 @@ INSTALLED_APPS = [
     'corsheaders',
     'users',
     'stocks',
+    'news',
 ]
+
+# settings.py
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "news-cache",
+        "TIMEOUT": 300,  # 5분
+    }
+}
+
 
 
 REST_FRAMEWORK = {

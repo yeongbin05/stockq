@@ -1,67 +1,111 @@
-from django.db import models
-from django.contrib.auth import get_user_model
-User = get_user_model()
-
-# models.py
-
-class FavoriteStock(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='favorites')
-    stock = models.ForeignKey("stocks.Stock", on_delete=models.CASCADE, related_name='favorited_by')
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        unique_together = ('user', 'stock')
-
-    def __str__(self):
-        return f"{self.user.email} - {self.stock.symbol}"
-
-
-
 # stocks/models.py
+from django.db import models
+from django.conf import settings
+
 
 class Stock(models.Model):
-    symbol = models.CharField(max_length=10, unique=True)  # 예: AAPL
-    name = models.CharField(max_length=255)  # 예: Apple Inc.
-    exchange = models.CharField(max_length=50)  # 예: US
-    currency = models.CharField(max_length=10, null=True, blank=True)  # USD 등
-    type = models.CharField(max_length=20, null=True, blank=True)  # Stock, ETF 등
+    symbol = models.CharField(max_length=10, unique=True, db_index=True)  # e.g., AAPL
+    name = models.CharField(max_length=255)                               # e.g., Apple Inc.
+    exchange = models.CharField(max_length=50)                            # e.g., NASDAQ, NYSE
+    currency = models.CharField(max_length=10, blank=True, default="USD")
+    type = models.CharField(max_length=20, blank=True, default="Stock")   # Stock, ETF...
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.symbol} - {self.name}"
 
 
-
-class News(models.Model):
-    stock = models.ForeignKey("stocks.Stock", on_delete=models.CASCADE, related_name='news')
-    headline = models.TextField()
-    url = models.URLField(max_length=500, blank=True, null=True)
-    source = models.CharField(max_length=100, blank=True, null=True)
-    published_at = models.DateTimeField()  # 뉴스 발행 시각
-    raw_json = models.JSONField(blank=True, null=True)  # 원본 뉴스 데이터 저장용 (확장성)
+class FavoriteStock(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="favorites"
+    )
+    stock = models.ForeignKey(
+        Stock, on_delete=models.CASCADE, related_name="favorited_by"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        unique_together = ("user", "stock")
+        indexes = [models.Index(fields=["user", "stock"])]
+
     def __str__(self):
-        return f"{self.stock.symbol} - {self.headline[:30]}"
+        return f"{getattr(self.user, 'email', getattr(self.user, 'username', 'user'))} - {self.stock.symbol}"
+
+
+class News(models.Model):
+    # 본문/링크
+    headline = models.TextField()
+    url = models.URLField(max_length=1000, blank=True, null=True)
+    canonical_url = models.URLField(max_length=1000, blank=True, default="")
+    # URL 정규화 기반 SHA-256 (중복 제거의 기준)
+    url_hash = models.CharField(
+    max_length=64,
+    db_index=True,
+    null=False,     # 최종
+    blank=False,    # 최종
+    unique=True     # 최종
+)
+
+    # 메타
+    source = models.CharField(max_length=100, blank=True, null=True)      # 도메인/매체명
+    published_at = models.DateTimeField(db_index=True)                    # UTC 권장
+    language = models.CharField(max_length=8, blank=True, default="en")
+    raw_json = models.JSONField(blank=True, null=True)
+
+    # 관계
+    stocks = models.ManyToManyField(
+        Stock, through="NewsStock", related_name="news"
+    )
+
+    # 공통
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["-published_at"])]
+        ordering = ["-published_at"]
+
+    def __str__(self):
+        return self.headline[:60]
+
+
+class NewsStock(models.Model):
+    news = models.ForeignKey(News, on_delete=models.CASCADE)
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE)
+
+    class Meta:
+        unique_together = ("news", "stock")
+        indexes = [models.Index(fields=["stock", "news"])]
+
+    def __str__(self):
+        return f"{self.stock.symbol} <-> {self.news.id}"
 
 
 class Price(models.Model):
-    stock = models.ForeignKey("stocks.Stock", on_delete=models.CASCADE, related_name='prices')
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="prices")
     price = models.DecimalField(max_digits=12, decimal_places=2)
     change_percent = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
-    timestamp = models.DateTimeField()  # 주가 기준 시점
+    timestamp = models.DateTimeField()  # UTC 권장
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        unique_together = ("stock", "timestamp")
+        indexes = [models.Index(fields=["stock", "-timestamp"])]
+
     def __str__(self):
-        return f"{self.stock.symbol} - {self.price}"
+        return f"{self.stock.symbol} - {self.price} @ {self.timestamp}"
 
 
 class Summary(models.Model):
-    stock = models.ForeignKey("stocks.Stock", on_delete=models.CASCADE, related_name='summaries')
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="summaries")
     summary = models.TextField()
-    recommendations = models.TextField(blank=True, null=True)  # 대응 전략 (선택)
+    recommendations = models.TextField(blank=True, null=True)  # 선택
     date = models.DateField()  # 요약 기준 날짜
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("stock", "date")
+        indexes = [models.Index(fields=["stock", "-date"])]
 
     def __str__(self):
         return f"{self.stock.symbol} - {self.date}"
