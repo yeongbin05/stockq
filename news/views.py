@@ -1,6 +1,8 @@
 # news/views.py
 import re
 import logging
+from decimal import Decimal
+
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -21,6 +23,100 @@ from .serializers import NewsSerializer
 
 logger = logging.getLogger(__name__)
 SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
+
+def _get_yesterday_change_percent(symbol: str, api_key: str, debug: bool = False) -> dict:
+    """
+    '어제 하루 등락률' 계산:
+    1) 우선 Finnhub /stock/candle (일봉)에서 최근 거래일 2개 close로 계산
+    2) 실패/부족 시 폴백: /quote.pc(전일 종가) + candle의 마지막 close로 계산
+       - 주말/휴장에도 잘 동작 (예: 금 close vs 목 pc)
+    반환:
+      close, prev_close, yesterday_change_percent, date_utc[, debug]
+    """
+    # ---- 1) 일봉 2개 시도 (정공법)
+    to_dt = datetime.now(timezone.utc)
+    from_dt = to_dt - timedelta(days=14)  # 휴장 대비 버퍼
+    to_ts = int(to_dt.timestamp())
+    from_ts = int(from_dt.timestamp())
+
+    candle_url = (
+        "https://finnhub.io/api/v1/stock/candle"
+        f"?symbol={symbol}&resolution=D&from={from_ts}&to={to_ts}&token={api_key}"
+    )
+    try:
+        r = requests.get(candle_url, timeout=6)
+        r.raise_for_status()
+        j = r.json()  # { s:"ok"|"no_data", t:[...], c:[...], ... }
+        c_status = j.get("s")
+        t_list = j.get("t") or []
+        c_list = j.get("c") or []
+
+        if c_status == "ok" and len(c_list) >= 2:
+            close = Decimal(str(c_list[-1]))
+            prev_close = Decimal(str(c_list[-2]))
+            pct = None if prev_close == 0 else ((close - prev_close) / prev_close * Decimal("100")).quantize(Decimal("0.01"))
+            last_ts = datetime.fromtimestamp(t_list[-1], tz=timezone.utc) if t_list else None
+
+            out = {
+                "close": str(close),
+                "prev_close": str(prev_close),
+                "yesterday_change_percent": None if pct is None else str(pct),
+                "date_utc": last_ts.date().isoformat() if last_ts else None,
+            }
+            if debug:
+                out["debug"] = {"path": "candle-2closes"}
+            return out
+    except Exception as e:
+        # 계속 폴백 진행
+        if debug:
+            c_status = f"exception:{e}"
+
+    # ---- 2) 폴백: /quote.pc + candle 마지막 close
+    quote_url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={api_key}"
+    try:
+        qr = requests.get(quote_url, timeout=5)
+        qr.raise_for_status()
+        q = qr.json()  # { c, pc, d, dp, ... }
+        pc = q.get("pc", None)
+
+        # candle에서 최소 1개 close는 받아와 보자 (최신 종가)
+        # (위에서 받은 j/t_list/c_list 재사용 시도, 없으면 다시 호출)
+        if not locals().get("j"):
+            r2 = requests.get(candle_url, timeout=6)
+            r2.raise_for_status()
+            j = r2.json()
+            t_list = j.get("t") or []
+            c_list = j.get("c") or []
+
+        if pc is not None and isinstance(c_list, list) and len(c_list) >= 1:
+            close = Decimal(str(c_list[-1]))
+            prev_close = Decimal(str(pc))
+            pct = None if prev_close == 0 else ((close - prev_close) / prev_close * Decimal("100")).quantize(Decimal("0.01"))
+            last_ts = datetime.fromtimestamp(t_list[-1], tz=timezone.utc) if t_list else None
+
+            out = {
+                "close": str(close),
+                "prev_close": str(prev_close),
+                "yesterday_change_percent": None if pct is None else str(pct),
+                "date_utc": last_ts.date().isoformat() if last_ts else None,
+            }
+            if debug:
+                out["debug"] = {"path": "fallback-quote-pc", "candle_status": j.get("s")}
+            return out
+    except Exception as e:
+        if debug:
+            return {
+                "close": None, "prev_close": None,
+                "yesterday_change_percent": None, "date_utc": None,
+                "debug": {"error": str(e), "candle_status": locals().get("c_status")}
+            }
+
+    # ---- 최종 실패
+    out = {"close": None, "prev_close": None, "yesterday_change_percent": None, "date_utc": None}
+    if debug:
+        out["debug"] = {"path": "failed", "candle_status": locals().get("c_status")}
+    return out
+
 
 
 # -------------------------------
@@ -62,11 +158,14 @@ class NewsSummaryView(View):
             return JsonResponse({"error": "Server API key misconfiguration."}, status=500)
 
         # 7) 캐시 확인
-        cache_key = f"news:summary:{symbol}:{days}:{source_filter}:{limit}:{from_date}:{to_date}"
-        cached = cache.get(cache_key)
-        if cached:
-            cached["cached"] = True
-            return JsonResponse(cached)
+        nocache = request.GET.get("nocache") in ("1", "true", "True")
+        cache_key = f"news:summary:{symbol}:{days}:{source_filter}:{limit}:{from_date}:{to_date}:v2"  # ← v2로 강제 무효화
+        if not nocache:
+            cached = cache.get(cache_key)
+            if cached:
+                cached["cached"] = True
+                return JsonResponse(cached)
+
 
         # 8) Finnhub 요청
         url = (
@@ -97,6 +196,15 @@ class NewsSummaryView(View):
             })
             if len(items) >= limit:
                 break
+        # 9.x) 전일 대비 등락률 계산 추가
+    
+        try:
+            debug_flag = request.GET.get("debug") in ("1", "true", "True")
+            eod = _get_yesterday_change_percent(symbol, api_key, debug=debug_flag)
+        except Exception as e:
+            logger.warning("EOD change calc failed for %s: %s", symbol, e)
+            eod = {"yesterday_change_percent": None, "close": None, "prev_close": None, "date_utc": None}
+
 
         payload = {
             "symbol": symbol,
@@ -105,6 +213,10 @@ class NewsSummaryView(View):
             "source": source_filter,
             "count": len(items),
             "items": items,
+            "yesterday_change_percent": eod["yesterday_change_percent"],
+            "close": eod["close"],
+            "prev_close": eod["prev_close"],
+            "eod_date_utc": eod["date_utc"],
             "cached": False,
         }
 
