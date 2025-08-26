@@ -9,13 +9,11 @@ urlpatterns = [
         FavoriteStockViewSet.as_view({"get": "list", "post": "create"}),
         name="favorite-stock-list-create",
     ),
-
-    # 즐겨찾기 삭제: 심볼 기준
-    # 예: DELETE /api/stocks/favorites/remove/AAPL/
+    # 즐겨찾기 단건 삭제 (RESTful)
     path(
-        "favorites/remove/<str:symbol>/",
-        FavoriteStockViewSet.as_view({"delete": "remove"}),
-        name="favorite-stock-remove",
+        "favorites/<str:symbol>/",
+        FavoriteStockViewSet.as_view({"delete": "destroy"}),
+        name="favorite-stock-destroy",
     ),
 
     # 종목 검색

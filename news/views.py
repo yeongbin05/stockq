@@ -20,7 +20,11 @@ from rest_framework.pagination import PageNumberPagination
 
 from stocks.models import News, Stock, FavoriteStock  # ✅ stocks에서 News/Stock/FavoriteStock 사용
 from .serializers import NewsSerializer
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import permissions
 
+from stocks.services import upsert_news_for_symbol
 logger = logging.getLogger(__name__)
 SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 
@@ -281,3 +285,16 @@ class NewsFeedView(ListAPIView):
                 qs = qs.filter(published_at__lte=dt)
 
         return qs.distinct()
+
+
+class NewsIngestView(APIView):
+    permission_classes = [permissions.IsAuthenticated]  # 원하면 AllowAny로 바꿔도 됨
+
+    def post(self, request):
+        symbol = request.data.get("symbol", "AAPL").upper()
+        try:
+            days = int(request.data.get("days", 1))
+        except ValueError:
+            days = 1
+        res = upsert_news_for_symbol(symbol, days=days)
+        return Response({"symbol": symbol, "days": days, **res})

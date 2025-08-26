@@ -19,6 +19,7 @@ propcache==0.3.2
 PyJWT==2.9.0
 python-decouple==3.8
 python-dotenv==1.1.0
+redis==6.4.0
 requests==2.32.4
 soupsieve==2.7
 sqlparse==0.5.3
