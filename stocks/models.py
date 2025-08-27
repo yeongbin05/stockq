@@ -109,3 +109,21 @@ class Summary(models.Model):
 
     def __str__(self):
         return f"{self.stock.symbol} - {self.date}"
+
+# stocks/models.py (하단에 추가)
+
+class DailyUserNews(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    date = models.DateField()
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE)
+    summary = models.TextField()  # GPT 요약 결과 등
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("user", "date", "stock")
+        indexes = [
+            models.Index(fields=["user", "date"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user} - {self.stock.symbol} - {self.date}"

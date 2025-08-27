@@ -1,13 +1,14 @@
 # stocks/services.py
 import hashlib
 from datetime import datetime, timedelta, timezone
+from django.utils.timezone import now
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 import requests
 from django.conf import settings
 from django.db import transaction
 
-from .models import Stock, News, NewsStock
+from .models import Stock, News, NewsStock,DailyUserNews
 
 
 FINNHUB_COMPANY_NEWS = "https://finnhub.io/api/v1/company-news"
@@ -120,3 +121,32 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
 
     return {"created_news": created_news, "linked_pairs": linked_pairs, "skipped": skipped}
     
+
+
+
+def store_daily_summaries_for_user(user, summaries_by_symbol: dict):
+    """
+    summaries_by_symbol = {
+        "AAPL": "애플은 실적 발표 후 하락...",
+        "MSFT": "마이크로소프트는 AI 투자 확대 중..."
+    }
+    """
+    today = now().date()
+    saved = 0
+
+    for symbol, summary in summaries_by_symbol.items():
+        try:
+            stock = Stock.objects.get(symbol__iexact=symbol)
+        except Stock.DoesNotExist:
+            continue
+
+        obj, created = DailyUserNews.objects.get_or_create(
+            user=user,
+            date=today,
+            stock=stock,
+            defaults={"summary": summary}
+        )
+        if created:
+            saved += 1
+
+    return saved
