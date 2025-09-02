@@ -39,6 +39,8 @@ urlpatterns = [
     path("api/ping/", ping),       # 인증 필요
 
     path('api/users/', include('users.urls')),
-    path('api/', include('news.urls')),
+    path('api/news/', include('news.urls')),
     path('api/stocks/', include('stocks.urls')),
+    path("api/subscriptions/", include("subscriptions.urls")),
+
 ]

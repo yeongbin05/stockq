@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'users',
     'stocks',
     'news',
+    'subscriptions',
 ]
 
 
@@ -59,6 +60,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",  # 기본은 보호
     ),
+    "EXCEPTION_HANDLER": "config.exception_handlers.custom_exception_handler",
 }
 
 MIDDLEWARE = [
