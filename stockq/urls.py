@@ -20,7 +20,7 @@ from django.urls import path,include
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView,SpectacularRedocView
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def health(request):
@@ -34,10 +34,12 @@ def ping(request):
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),     # JSON
+    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema")), # Swagger UI
 
     path("api/health/", health),   # 공개
     path("api/ping/", ping),       # 인증 필요
-
+    path("api/redoc/", SpectacularRedocView.as_view(url_name="schema")),
     path('api/users/', include('users.urls')),
     path('api/news/', include('news.urls')),
     path('api/stocks/', include('stocks.urls')),

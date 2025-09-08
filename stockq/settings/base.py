@@ -48,6 +48,8 @@ INSTALLED_APPS = [
     'stocks',
     'news',
     'subscriptions',
+    "drf_spectacular",
+    "drf_spectacular_sidecar",
 ]
 
 
@@ -61,9 +63,20 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",  # 기본은 보호
     ),
     "EXCEPTION_HANDLER": "config.exception_handlers.custom_exception_handler",
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# 문서 메타데이터
+SPECTACULAR_SETTINGS = {
+    "TITLE": "StockQ API",     # [이유] 문서 제목.
+    "DESCRIPTION": "US stocks news & summary API",  # [이유] 간단 설명.
+    "VERSION": "0.1.0",        # [이유] 스키마 버전 태깅.
+    "SERVE_INCLUDE_SCHEMA": False,  # [이유] /api/schema 에 스키마만 반환, 문서는 /api/docs 로.
 }
 
 MIDDLEWARE = [
+    # 이 코드가 왜 맨 위인지 확인
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -127,7 +140,8 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = "Asia/Seoul"
+
 
 USE_I18N = True
 
