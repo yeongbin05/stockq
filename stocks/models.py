@@ -5,15 +5,21 @@ User = get_user_model()
 # models.py
 
 class FavoriteStock(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='favorites')
-    stock = models.ForeignKey("stocks.Stock", on_delete=models.CASCADE, related_name='favorited_by')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='favorites', db_index=True)
+    stock = models.ForeignKey("stocks.Stock", on_delete=models.CASCADE, related_name='favorited_by', db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('user', 'stock')
+        constraints = [
+            models.UniqueConstraint(fields=["user", "stock"], name="uniq_user_stock")
+        ]
+        indexes = [
+            models.Index(fields=["user", "-created_at"]),
+        ]
 
     def __str__(self):
-        return f"{self.user.email} - {self.stock.symbol}"
+        return f"{self.user_id}:{self.stock_id}"
+
 
 
 
@@ -65,3 +71,18 @@ class Summary(models.Model):
 
     def __str__(self):
         return f"{self.stock.symbol} - {self.date}"
+
+
+class Notification(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    stock = models.ForeignKey("stocks.Stock", on_delete=models.CASCADE, related_name='notifications')
+    news = models.ForeignKey("stocks.News", on_delete=models.CASCADE, related_name='notifications')
+    message = models.CharField(max_length=255)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.email} - {self.stock.symbol} - {'read' if self.is_read else 'unread'}"

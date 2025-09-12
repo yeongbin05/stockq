@@ -47,15 +47,33 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
+    'channels',
     'users',
     'stocks',
 ]
 
 
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    "DEFAULT_RENDERER_CLASSES": (
+        ["rest_framework.renderers.JSONRenderer"]
+        if not DEBUG else
+        ["rest_framework.renderers.JSONRenderer",
+         "rest_framework.renderers.BrowsableAPIRenderer"]
+    ),
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "30/min",
+        "user": "120/min",
+    },
 }
 
 MIDDLEWARE = [
@@ -88,6 +106,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'stockq.wsgi.application'
+ASGI_APPLICATION = 'stockq.asgi.application'
 
 
 # Database
@@ -102,9 +121,10 @@ DATABASES = {
 
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=2),  # 2시간 정도로 테스트
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
 }
+
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
@@ -146,3 +166,25 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'users.User'
+
+# Channels / Redis
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [(env('REDIS_HOST', default='127.0.0.1'), int(env('REDIS_PORT', default=6379)))],
+        },
+    },
+}
+
+# Celery
+CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/0')
+CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default='redis://127.0.0.1:6379/1')
+CELERY_TIMEZONE = TIME_ZONE
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'fetch-latest-news-every-10-min': {
+        'task': 'stocks.tasks.fetch_latest_news',
+        'schedule': 600.0,
+    },
+}

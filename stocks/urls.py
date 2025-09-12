@@ -1,28 +1,16 @@
-from django.urls import path
-from .views import FavoriteStockViewSet, StockSearchViewSet
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import FavoriteStockViewSet, StockViewSet, NewsViewSet, NotificationViewSet, SummaryViewSet
 
 
+
+router = DefaultRouter()
+router.register(r"favorites", FavoriteStockViewSet, basename="favorite")
+router.register(r"stocks", StockViewSet, basename="stock")
+router.register(r"news", NewsViewSet, basename="news")
+router.register(r"notifications", NotificationViewSet, basename="notification")
+router.register(r"summaries", SummaryViewSet, basename="summary")
 
 urlpatterns = [
-   
-    # 즐겨찾기 목록 조회 및 추가
-    path(
-        "favorites/",
-        FavoriteStockViewSet.as_view({"get": "list", "post": "create"}),
-        name="favorite-stock-list-create",
-    ),
-
-    # 즐겨찾기 삭제 (custom action)
-    path(
-        "favorites/<str:pk>/remove/",
-        FavoriteStockViewSet.as_view({"delete": "remove"}),
-        name="favorite-stock-remove",
-    ),
-
-    # 종목 검색
-    path(
-        "search/",
-        StockSearchViewSet.as_view({"get": "list"}),
-        name="stock-search",
-    ),
+    path("", include(router.urls)),
 ]
