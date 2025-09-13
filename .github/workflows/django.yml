@@ -41,6 +41,7 @@ jobs:
 
       - name: Run migrations
         env:
+          DJANGO_SETTINGS_MODULE: stockq.settings.local
           DATABASE_URL: postgres://stockq:stockq123@localhost:5432/stockq
         run: |
           python manage.py migrate
