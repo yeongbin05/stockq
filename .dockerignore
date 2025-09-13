@@ -1,0 +1,37 @@
+# Python 캐시/빌드 파일
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# 가상환경
+.venv/
+venv/
+
+# VCS / IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+
+# 환경변수 / 인증키 (절대 노출 금지)
+.env
+*.pem
+
+# 로그/테스트 산출물
+*.log
+.coverage
+htmlcov/
+dist/
+build/
+
+# 문서/잡파일
+docs/
+*.md
+
+# Django collectstatic 결과 (운영은 S3/CloudFront 쓰면 됨)
+staticfiles/
+media/

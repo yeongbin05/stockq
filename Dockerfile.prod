@@ -1,0 +1,20 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Postgres 드라이버(psycopg2) 설치 대비
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+# 정적 파일 수집
+RUN python manage.py collectstatic --noinput
+
+# 운영 서버 실행 (Gunicorn 멀티 워커)
+CMD ["gunicorn", "stockq.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]
