@@ -7,6 +7,8 @@ services:
         python manage.py migrate &&
         python manage.py test
       "
+    environment:
+      DJANGO_SETTINGS_MODULE: stockq.settings.local  # 🔥 반드시 명시
     depends_on:
       - db
       - redis
