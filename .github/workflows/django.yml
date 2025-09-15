@@ -25,8 +25,15 @@ jobs:
           echo "POSTGRES_USER=${{ secrets.POSTGRES_USER }}" >> .env
           echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" >> .env
 
-      - name: Build and run containers (dev)
+      - name: Build and run containers (CI mode)
         run: docker compose -f docker-compose.dev.yml up -d --build
+
+      - name: Check container status
+        run: docker compose -f docker-compose.dev.yml ps
+
+      - name: Show logs if web died
+        if: failure()
+        run: docker compose -f docker-compose.dev.yml logs web
 
       - name: Wait for DB to be ready
         run: |
