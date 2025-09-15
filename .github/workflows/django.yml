@@ -1,59 +1,47 @@
 name: Django CI
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
-      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: ${{ env.POSTGRES_DB }}
-          POSTGRES_USER: ${{ env.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
-        ports:
-          - "5432:5432"
-        options: >-
-          --health-cmd="pg_isready -U ${{ env.POSTGRES_USER }}"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-
-      redis:
-        image: redis:7
-        ports:
-          - "6379:6379"
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout source code
+        uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
+      - name: Create .env file from secrets
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          echo "FINNHUB_API_KEY=${{ secrets.FINNHUB_API_KEY }}" >> .env
+          echo "POSTGRES_DB=${{ secrets.POSTGRES_DB }}" >> .env
+          echo "POSTGRES_USER=${{ secrets.POSTGRES_USER }}" >> .env
+          echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" >> .env
 
-      - name: Run migrations
-        env:
-          DJANGO_SETTINGS_MODULE: stockq.settings.local
-          DATABASE_URL: postgres://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
-          FINNHUB_API_KEY: ${{ env.FINNHUB_API_KEY }}
-        run: python manage.py migrate
+      - name: Build and run containers
+        run: docker-compose up -d --build
 
-      - name: Run tests
-        env:
-          DJANGO_SETTINGS_MODULE: stockq.settings.local
-          DATABASE_URL: postgres://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
-          FINNHUB_API_KEY: ${{ env.FINNHUB_API_KEY }}
-        run: python manage.py test
+      - name: Wait for DB to be ready
+        run: |
+          echo "Waiting for PostgreSQL..."
+          for i in {1..10}; do
+            docker-compose exec -T db pg_isready -U "${{ secrets.POSTGRES_USER }}" && break
+            sleep 3
+          done
+
+      - name: Run Django migrations
+        run: docker-compose exec -T web python manage.py migrate
+
+      - name: Run Django tests
+        run: docker-compose exec -T web python manage.py test
+
+      - name: Stop containers
+        if: always()
+        run: docker-compose down
