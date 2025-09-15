@@ -43,12 +43,10 @@ jobs:
             sleep 3
           done
 
-      - name: Run Django migrations
-        run: docker compose -f docker-compose.dev.yml exec -T web python manage.py migrate
+      - name: Run CI with override
+        run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml up --build --abort-on-container-exit
 
-      - name: Run Django tests
-        run: docker compose -f docker-compose.dev.yml exec -T web python manage.py test
 
       - name: Stop containers
         if: always()
-        run: docker compose -f docker-compose.dev.yml down
+        run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml down
