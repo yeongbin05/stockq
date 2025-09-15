@@ -10,13 +10,13 @@ jobs:
       postgres:
         image: postgres:17
         env:
-          POSTGRES_DB: stockq
-          POSTGRES_USER: stockq
-          POSTGRES_PASSWORD: stockq123
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         ports:
           - "5432:5432"
         options: >-
-          --health-cmd="pg_isready -U stockq"
+          --health-cmd="pg_isready -U ${{ secrets.POSTGRES_USER }}"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
@@ -42,10 +42,13 @@ jobs:
       - name: Run migrations
         env:
           DJANGO_SETTINGS_MODULE: stockq.settings.local
-          DATABASE_URL: postgres://stockq:stockq123@localhost:5432/stockq
-        run: |
-          python manage.py migrate
+          DATABASE_URL: postgres://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/${{ secrets.POSTGRES_DB }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: python manage.py migrate
 
       - name: Run tests
-        run: |
-          python manage.py test
+        env:
+          DJANGO_SETTINGS_MODULE: stockq.settings.local
+          DATABASE_URL: postgres://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/${{ secrets.POSTGRES_DB }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: python manage.py test
