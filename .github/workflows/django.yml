@@ -5,18 +5,23 @@ on: [push, pull_request]
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
 
     services:
       postgres:
         image: postgres:17
         env:
-          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
-          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
         ports:
           - "5432:5432"
         options: >-
-          --health-cmd="pg_isready -U ${{ secrets.POSTGRES_USER }}"
+          --health-cmd="pg_isready -U ${{ env.POSTGRES_USER }}"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
@@ -42,13 +47,13 @@ jobs:
       - name: Run migrations
         env:
           DJANGO_SETTINGS_MODULE: stockq.settings.local
-          DATABASE_URL: postgres://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/${{ secrets.POSTGRES_DB }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          DATABASE_URL: postgres://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
+          FINNHUB_API_KEY: ${{ env.FINNHUB_API_KEY }}
         run: python manage.py migrate
 
       - name: Run tests
         env:
           DJANGO_SETTINGS_MODULE: stockq.settings.local
-          DATABASE_URL: postgres://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/${{ secrets.POSTGRES_DB }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          DATABASE_URL: postgres://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
+          FINNHUB_API_KEY: ${{ env.FINNHUB_API_KEY }}
         run: python manage.py test
