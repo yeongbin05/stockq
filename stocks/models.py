@@ -4,7 +4,7 @@ from django.conf import settings
 
 
 class Stock(models.Model):
-    symbol = models.CharField(max_length=10, unique=True, db_index=True)  # e.g., AAPL
+    symbol = models.CharField(max_length=10, unique=True)  # e.g., AAPL
     name = models.CharField(max_length=255)                               # e.g., Apple Inc.
     exchange = models.CharField(max_length=50)                            # e.g., NASDAQ, NYSE
     currency = models.CharField(max_length=10, blank=True, default="USD")
@@ -26,12 +26,15 @@ class FavoriteStock(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ("user", "stock")
-        indexes = [models.Index(fields=["user", "stock"])]
+        constraints = [
+            models.UniqueConstraint(fields=["user", "stock"], name="uq_user_stock"),
+        ]
+        indexes = [
+            models.Index(fields=["user", "stock"]),
+        ]
 
     def __str__(self):
-        return f"{getattr(self.user, 'email', getattr(self.user, 'username', 'user'))} - {self.stock.symbol}"
-
+        return f"{self.user_id} - {self.stock.symbol}"
 
 class News(models.Model):
     # 본문/링크
@@ -41,9 +44,8 @@ class News(models.Model):
     # URL 정규화 기반 SHA-256 (중복 제거의 기준)
     url_hash = models.CharField(
     max_length=64,
-    db_index=True,
-    null=False,     # 최종
-    blank=False,    # 최종
+    null=True,     # 최종
+    blank=True,    # 최종
     unique=True     # 최종
 )
 
@@ -63,7 +65,6 @@ class News(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        indexes = [models.Index(fields=["-published_at"])]
         ordering = ["-published_at"]
 
     def __str__(self):
@@ -90,8 +91,7 @@ class Price(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ("stock", "timestamp")
-        indexes = [models.Index(fields=["stock", "-timestamp"])]
+        unique_together = ("stock", "timestamp")    
 
     def __str__(self):
         return f"{self.stock.symbol} - {self.price} @ {self.timestamp}"
@@ -106,7 +106,7 @@ class Summary(models.Model):
 
     class Meta:
         unique_together = ("stock", "date")
-        indexes = [models.Index(fields=["stock", "-date"])]
+    
 
     def __str__(self):
         return f"{self.stock.symbol} - {self.date}"
@@ -122,9 +122,7 @@ class DailyUserNews(models.Model):
 
     class Meta:
         unique_together = ("user", "date", "stock")
-        indexes = [
-            models.Index(fields=["user", "date"]),
-        ]
+
 
     def __str__(self):
         return f"{self.user} - {self.stock.symbol} - {self.date}"

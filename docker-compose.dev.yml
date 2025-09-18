@@ -40,6 +40,32 @@ services:
     volumes:
       - redis_data_dev:/data
 
+  celery:
+    build: 
+      context: .
+      dockerfile: Dockerfile.dev
+    command: celery -A stockq worker -l info
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - web
+      - redis
+
+  celery-beat:
+    build: 
+      context: .
+      dockerfile: Dockerfile.dev
+    command: celery -A stockq beat -l info
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - web
+      - redis
+
 volumes:
   db_data_dev:
   redis_data_dev:

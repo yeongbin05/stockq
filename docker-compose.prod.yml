@@ -37,6 +37,28 @@ services:
     ports:
       - "6379:6379"
 
+  celery:
+    build: .
+    command: celery -A stockq worker -l info
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - web
+      - redis
+
+  celery-beat:
+    build: .
+    command: celery -A stockq beat -l info
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - web
+      - redis
+
 volumes:
   db_data:
   redis_data:
