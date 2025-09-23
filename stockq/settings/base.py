@@ -162,10 +162,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'users.User'
 
 
-# Celery Redis 브로커 설정
-CELERY_BROKER_URL = "redis://redis:6379/0"
-CELERY_RESULT_BACKEND = "redis://redis:6379/1"
+REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", REDIS_URL)
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
 
 # 선택 옵션 (없어도 동작은 함)
 CELERY_TASK_TRACK_STARTED = True

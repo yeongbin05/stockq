@@ -237,7 +237,7 @@
 * 로깅: JSON 구조화( trace\_id, user\_id, path, status, latency\_ms )
 * 메트릭: 요청 지연 히스토그램, 큐 길이, 태스크 실패율
 * 알람(선택): 오류율/큐 적체/P95 임계 경보
-
+* redis lua로 봇 감지 등 user별로 api요청 횟수 제한 걸기
 ---
 
 ## 10) Evidence(제출물) 체크리스트
