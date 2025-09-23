@@ -41,17 +41,15 @@ class News(models.Model):
     headline = models.TextField()
     url = models.URLField(max_length=1000, blank=True, null=True)
     canonical_url = models.URLField(max_length=1000, blank=True, default="")
-    # URL 정규화 기반 SHA-256 (중복 제거의 기준)
-    url_hash = models.CharField(
-    max_length=64,
-    null=True,     # 최종
-    blank=True,    # 최종
-    unique=True     # 최종
-)
+    # URL 정규화 기반 SHA-256 (중복 제거 기준)
+    url_hash = models.CharField(max_length=64, unique=True)   # 필수, 중복 방지
+    
+    # Finnhub 고유 ID 있으면 저장 (없으면 null)
+    external_id = models.CharField(max_length=255, db_index=True, null=True, blank=True)
 
     # 메타
-    source = models.CharField(max_length=100, blank=True, null=True)      # 도메인/매체명
-    published_at = models.DateTimeField(db_index=True)                    # UTC 권장
+    source = models.CharField(max_length=100, blank=True, null=True)
+    published_at = models.DateTimeField(db_index=True)
     language = models.CharField(max_length=8, blank=True, default="en")
     raw_json = models.JSONField(blank=True, null=True)
 

@@ -1,9 +1,13 @@
 # users/views.py
 from rest_framework import viewsets, permissions
 from rest_framework.decorators import action
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from .models import User
 from .serializers import UserSerializer
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.tokens import RefreshToken
 
 class IsAdminOrSelf(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
@@ -25,3 +29,17 @@ class UserViewSet(viewsets.ModelViewSet):
     def me(self, request):
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
+
+
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            refresh_token = request.data["refresh"]
+            token = RefreshToken(refresh_token)
+            token.blacklist()  # ✅ 블랙리스트 처리
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception:
+            return Response(status=status.HTTP_400_BAD_REQUEST)

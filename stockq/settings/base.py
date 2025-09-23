@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
+    "rest_framework_simplejwt.token_blacklist",  
     'corsheaders',
     'users',
     'stocks',
@@ -50,6 +51,7 @@ INSTALLED_APPS = [
     'subscriptions',
     "drf_spectacular",
     "drf_spectacular_sidecar",
+    "django_celery_beat",
 ]
 
 
@@ -161,10 +163,13 @@ AUTH_USER_MODEL = 'users.User'
 
 
 # Celery Redis 브로커 설정
-CELERY_BROKER_URL = "redis://redis:6379/2"
-CELERY_RESULT_BACKEND = "redis://redis:6379/3"
+CELERY_BROKER_URL = "redis://redis:6379/0"
+CELERY_RESULT_BACKEND = "redis://redis:6379/1"
 
 
 # 선택 옵션 (없어도 동작은 함)
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30분 제한
+
+CELERY_TIMEZONE = "Asia/Seoul"
+CELERY_ENABLE_UTC = False
