@@ -1,8 +1,7 @@
 # stocks/utils.py
 import hashlib, urllib.parse
-import os
-import redis,time
-
+import os, time
+import redis
 
 def normalize_url(url: str) -> str:
     if not url:
@@ -20,12 +19,9 @@ def make_url_hash(url: str) -> str:
     norm = normalize_url(url)
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
-
-redis_client = redis.Redis(
-    host=os.getenv("REDIS_HOST", "localhost"),
-    port=int(os.getenv("REDIS_PORT", 6379)),
-    db=0,
-)
+# ✅ 환경변수 REDIS_URL 기반으로 연결
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 # Lua 스크립트 로드
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -35,8 +31,6 @@ with open(LUA_PATH, "r", encoding="utf-8") as f:
     TOKEN_BUCKET_SCRIPT = f.read()
 
 script_sha = redis_client.script_load(TOKEN_BUCKET_SCRIPT)
-
-
 
 def allow_request(bucket: str, capacity: int, rate: int) -> bool:
     now_us = int(time.time() * 1_000_000)  # 현재 시각(µs)

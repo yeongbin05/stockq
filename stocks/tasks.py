@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 import logging
 
+from celery import shared_task
 from stocks.utils import allow_request
 
 logger = logging.getLogger(__name__)
@@ -40,3 +41,9 @@ def fetch_news_for_symbol(self, symbol: str, days: int = 1):
 
     logger.info(f"[fetch_news_for_symbol] {symbol} → {len(articles)}개 기사 가져옴")
     return {"symbol": symbol, "total": len(articles)}
+
+
+
+@shared_task
+def add(x, y):
+    return x + y
