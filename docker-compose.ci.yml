@@ -1,38 +1,48 @@
 version: "3.9"
 
 services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: stockq
+      POSTGRES_USER: stockq
+      POSTGRES_PASSWORD: stockq123
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data_ci:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_ci:/data
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: >
+      sh -c "./scripts/wait-for-db.sh python manage.py migrate"
+    environment:
+      DJANGO_SETTINGS_MODULE: stockq.settings.ci
+    depends_on:
+      - db
+      - redis
+
   web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     command: >
-      sh -c "
-        python manage.py migrate &&
-        python manage.py test
-      "
+      sh -c "./scripts/wait-for-db.sh python manage.py test --keepdb"
     environment:
-      DJANGO_SETTINGS_MODULE: stockq.settings.local
+      DJANGO_SETTINGS_MODULE: stockq.settings.ci
     depends_on:
-      - db
-      - redis
+      - migrate
 
-  celery_worker:
-    command: >
-      sh -c "
-        python manage.py migrate &&
-        celery -A stockq worker -l info
-      "
-    environment:
-      DJANGO_SETTINGS_MODULE: stockq.settings.local
-    depends_on:
-      - db
-      - redis
-
-  celery_beat:
-    command: >
-      sh -c "
-        python manage.py migrate &&
-        celery -A stockq beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
-      "
-    environment:
-      DJANGO_SETTINGS_MODULE: stockq.settings.local
-    depends_on:
-      - db
-      - redis
+volumes:
+  db_data_ci:
+  redis_data_ci:
+  
