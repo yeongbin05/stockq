@@ -1,4 +1,5 @@
 # users/models.py
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 
@@ -38,3 +39,25 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
+
+
+class SocialAccount(models.Model):
+    PROVIDERS = (
+        ("kakao", "Kakao"),
+        ("google", "Google"),
+        ("naver", "Naver"),
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="social_accounts"
+    )
+    provider = models.CharField(max_length=20, choices=PROVIDERS)
+    provider_user_id = models.CharField(max_length=255, unique=True)
+    email = models.EmailField(blank=True, null=True)  # 소셜 계정 이메일 별도 보관
+    extra_data = models.JSONField(default=dict)       # 원본 응답 전체 저장
+    is_active = models.BooleanField(default=True)     # 연결 해제 시 soft delete
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)  # 마지막 갱신 시점
