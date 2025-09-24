@@ -14,5 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# wait-for-db 실행권한 (CI에서도 보장)
+RUN chmod +x scripts/wait-for-db.sh
+
 # 개발 서버 실행 (자동 리로드 & 디버그 모드)
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

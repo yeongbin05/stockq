@@ -26,27 +26,9 @@ jobs:
           echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" >> .env
           echo "SECRET_KEY=${{ secrets.SECRET_KEY }}" >> .env
 
-      - name: Build and run containers (CI mode)
-        run: docker compose -f docker-compose.dev.yml up -d --build
-
-      - name: Check container status
-        run: docker compose -f docker-compose.dev.yml ps
-
-      - name: Show logs if web died
-        if: failure()
-        run: docker compose -f docker-compose.dev.yml logs web
-
-      - name: Wait for DB to be ready
-        run: |
-          echo "Waiting for PostgreSQL..."
-          for i in {1..10}; do
-            docker compose -f docker-compose.dev.yml exec -T db pg_isready -U "${{ secrets.POSTGRES_USER }}" && break
-            sleep 3
-          done
-
-      - name: Run CI with override
+      # ✅ dev + ci 함께 실행 (한 번만)
+      - name: Run CI with Docker Compose
         run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml up --build --abort-on-container-exit
-
 
       - name: Stop containers
         if: always()
