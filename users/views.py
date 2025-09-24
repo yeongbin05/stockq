@@ -11,7 +11,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import AllowAny
 from django.db import transaction
-
+from django.contrib.auth import get_user_model
+User = get_user_model()
 class IsAdminOrSelf(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         return request.user.is_staff or obj == request.user
@@ -33,6 +34,7 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
 
+
 class KakaoLoginView(APIView):
     permission_classes = [AllowAny]
 
@@ -50,7 +52,7 @@ class KakaoLoginView(APIView):
         if resp.status_code != 200:
             return Response(
                 {"detail": "kakao auth failed", "data": safe_json(resp)},
-                status=400
+                status=400,
             )
         data = resp.json()
 
@@ -64,44 +66,44 @@ class KakaoLoginView(APIView):
         email = kakao_account.get("email")  # 없을 수 있음
         nickname = profile.get("nickname") or f"kakao_{kakao_id}"
 
-        # 2) DB 매핑 (원자성 보장)
+        # 2) DB 매핑 (user_id NULL 문제 해결)
         with transaction.atomic():
-            account, created = SocialAccount.objects.select_for_update().get_or_create(
-                provider="kakao",
-                provider_user_id=kakao_id,
-                defaults={
-                    "email": email,
-                    "extra_data": data,
-                    "is_active": True,
-                },
-            )
-
-            # 비활성 연결이면 거부
-            if not account.is_active:
-                return Response({"detail": "social account is inactive"}, status=403)
-
-            if created:
-                # 새 유저 생성 (이메일이 없으면 대체 이메일 부여)
-                # username 필드가 unique면 충돌 방지 위해 접미사 포함
-                user = User.objects.create_user(
-                    email=email or f"{nickname}+{kakao_id}@kakao.local",
-                    username=f"{nickname}_{kakao_id}",
+            try:
+                account = SocialAccount.objects.select_for_update().get(
+                    provider="kakao",
+                    provider_user_id=kakao_id,
                 )
-                account.user = user
-                account.save(update_fields=["user"])
-            else:
                 user = account.user
-                # 이메일이 새로 생겼거나 바뀌면 SocialAccount에만 반영
+
+                # 이메일/extra_data 업데이트
                 changed = False
                 if email and account.email != email:
                     account.email = email
                     changed = True
-                # 원본도 최신 보관
                 if account.extra_data != data:
                     account.extra_data = data
                     changed = True
                 if changed:
                     account.save(update_fields=["email", "extra_data", "updated_at"])
+
+            except SocialAccount.DoesNotExist:
+                # 새 유저 생성
+                user = User.objects.create_user(
+                    email=email or f"{nickname}+{kakao_id}@kakao.local",
+                    password=None,  # 소셜 계정은 로컬 비밀번호 불필요
+                )
+                account = SocialAccount.objects.create(
+                    user=user,
+                    provider="kakao",
+                    provider_user_id=kakao_id,
+                    email=email,
+                    extra_data=data,
+                    is_active=True,
+                )
+
+            # 비활성 연결이면 거부
+            if not account.is_active:
+                return Response({"detail": "social account is inactive"}, status=403)
 
         # 3) JWT 발급
         refresh = RefreshToken.for_user(user)
@@ -109,11 +111,12 @@ class KakaoLoginView(APIView):
             {
                 "access": str(refresh.access_token),
                 "refresh": str(refresh),
-                "user": {"id": user.id, "email": user.email, "username": user.get_username()},
+                "user": {"id": user.id, "email": user.email},
                 "provider": "kakao",
             },
             status=200,
         )
+
 
 
 def safe_json(resp):
