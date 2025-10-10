@@ -137,3 +137,28 @@ class LogoutView(APIView):
         except Exception:
             return Response(status=status.HTTP_400_BAD_REQUEST)
         
+
+
+class SignoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        user = request.user
+
+        # 콘솔에 어떤 유저가 요청했는지 찍기
+        print("=== SignoutView 요청 유저 ===")
+        print("request.user:", user)           # __str__ -> 보통 username
+        print("타입:", type(user))             # <class 'users.models.User'>
+        print("ID:", user.id)                 # User PK
+        print("Username:", user.username)     # 기본 username
+        if hasattr(user, "nickname"):
+            print("Nickname:", user.nickname) # 커스텀 필드 (있으면 출력)
+
+        # 소프트 딜리트 처리
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+
+        return Response(
+            {"detail": f"User {user.username} has been deactivated."},
+            status=status.HTTP_200_OK
+        )
