@@ -5,9 +5,12 @@ from rest_framework import viewsets, mixins, serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
+from datetime import datetime, timezone
+from django.utils import timezone as django_timezone
 
-from .models import FavoriteStock, Stock
+from .models import FavoriteStock, Stock, DailyUserNews
 from .serializers import FavoriteStockSerializer, StockSearchSerializer
+from .tasks import generate_news_summary_with_openai
 
 
 class FavoriteStockViewSet(viewsets.GenericViewSet,
@@ -102,6 +105,123 @@ class StockSearchViewSet(viewsets.ViewSet):
         queryset = exact + partial
         serializer = StockSearchSerializer(queryset, many=True, context={"request": request})
         return Response(serializer.data)
+
+
+class NewsSummaryViewSet(viewsets.ViewSet):
+    """
+    뉴스 요약 관련 API
+    - GET /api/summaries/ : 내 요약 목록 조회
+    - POST /api/summaries/ : 요약 생성 요청
+    - GET /api/summaries/{symbol}/ : 특정 종목 요약 조회
+    """
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        """사용자의 모든 요약 조회"""
+        today = django_timezone.now().date()
+        
+        summaries = DailyUserNews.objects.filter(
+            user=request.user,
+            date=today
+        ).select_related('stock').order_by('-created_at')
+        
+        data = []
+        for summary in summaries:
+            data.append({
+                'id': summary.id,
+                'stock': {
+                    'symbol': summary.stock.symbol,
+                    'name': summary.stock.name
+                },
+                'summary': summary.summary,
+                'date': summary.date,
+                'created_at': summary.created_at
+            })
+        
+        return Response({
+            'date': today,
+            'summaries': data,
+            'count': len(data)
+        })
+
+    def create(self, request):
+        """요약 생성 요청"""
+        symbol = request.data.get('symbol')
+        
+        if symbol:
+            # 특정 종목 요약 생성
+            try:
+                stock = Stock.objects.get(symbol__iexact=symbol)
+                # 사용자가 해당 종목을 즐겨찾기에 등록했는지 확인
+                if not FavoriteStock.objects.filter(user=request.user, stock=stock).exists():
+                    return Response({
+                        'error': '해당 종목이 즐겨찾기에 등록되지 않았습니다.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                # Celery 태스크 실행
+                task = generate_news_summary_with_openai.delay(request.user.id, symbol)
+                
+                return Response({
+                    'message': '요약 생성 요청이 큐에 추가되었습니다.',
+                    'task_id': task.id,
+                    'symbol': symbol
+                }, status=status.HTTP_202_ACCEPTED)
+                
+            except Stock.DoesNotExist:
+                return Response({
+                    'error': '해당 종목을 찾을 수 없습니다.'
+                }, status=status.HTTP_404_NOT_FOUND)
+        else:
+            # 모든 관심종목 요약 생성
+            task = generate_news_summary_with_openai.delay(request.user.id)
+            
+            return Response({
+                'message': '모든 관심종목 요약 생성 요청이 큐에 추가되었습니다.',
+                'task_id': task.id
+            }, status=status.HTTP_202_ACCEPTED)
+
+    def retrieve(self, request, symbol=None):
+        """특정 종목의 요약 조회"""
+        if not symbol:
+            return Response({
+                'error': '종목 심볼이 필요합니다.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            stock = Stock.objects.get(symbol__iexact=symbol)
+        except Stock.DoesNotExist:
+            return Response({
+                'error': '해당 종목을 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        today = django_timezone.now().date()
+        
+        try:
+            summary = DailyUserNews.objects.get(
+                user=request.user,
+                stock=stock,
+                date=today
+            )
+            
+            return Response({
+                'stock': {
+                    'symbol': stock.symbol,
+                    'name': stock.name
+                },
+                'summary': summary.summary,
+                'date': summary.date,
+                'created_at': summary.created_at
+            })
+            
+        except DailyUserNews.DoesNotExist:
+            return Response({
+                'error': '해당 종목의 오늘 요약이 없습니다.',
+                'stock': {
+                    'symbol': stock.symbol,
+                    'name': stock.name
+                },
+                'date': today
+            }, status=status.HTTP_404_NOT_FOUND)
 
 
 

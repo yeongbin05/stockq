@@ -1,6 +1,6 @@
 # stocks/urls.py
 from django.urls import path
-from .views import FavoriteStockViewSet, StockSearchViewSet
+from .views import FavoriteStockViewSet, StockSearchViewSet, NewsSummaryViewSet
 
 urlpatterns = [
     # 즐겨찾기 목록 조회 & 추가
@@ -21,5 +21,17 @@ urlpatterns = [
         "search/",
         StockSearchViewSet.as_view({"get": "list"}),
         name="stock-search",
+    ),
+    
+    # 뉴스 요약
+    path(
+        "summaries/",
+        NewsSummaryViewSet.as_view({"get": "list", "post": "create"}),
+        name="news-summary-list-create",
+    ),
+    path(
+        "summaries/<str:symbol>/",
+        NewsSummaryViewSet.as_view({"get": "retrieve"}),
+        name="news-summary-retrieve",
     ),
 ]

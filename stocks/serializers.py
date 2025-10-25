@@ -3,14 +3,21 @@ from rest_framework import serializers, exceptions
 from .models import FavoriteStock, Stock, FavoriteStock
 
 
+class StockDetailSerializer(serializers.ModelSerializer):
+    """즐겨찾기 응답용 Stock 정보"""
+    class Meta:
+        model = Stock
+        fields = ["id", "symbol", "name", "exchange", "currency"]
+
+
 class FavoriteStockSerializer(serializers.ModelSerializer):
     symbol = serializers.CharField(write_only=True)  # 클라에서 symbol 받음
-    stock_symbol = serializers.CharField(source="stock.symbol", read_only=True)
+    stock = StockDetailSerializer(read_only=True)  # 조회 시 stock 전체 정보 반환
 
     class Meta:
         model = FavoriteStock
-        fields = ["id", "symbol", "stock_symbol"]
-        read_only_fields = ["id", "stock_symbol"]
+        fields = ["id", "symbol", "stock", "created_at"]
+        read_only_fields = ["id", "stock", "created_at"]
 
     def create(self, validated_data):
         request = self.context.get("request")
