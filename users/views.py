@@ -75,7 +75,7 @@ class KakaoLoginView(APIView):
                 )
                 user = account.user
 
-                # 이메일/extra_data 업데이트
+                # 이메일/extra_data/닉네임 업데이트
                 changed = False
                 if email and account.email != email:
                     account.email = email
@@ -83,6 +83,9 @@ class KakaoLoginView(APIView):
                 if account.extra_data != data:
                     account.extra_data = data
                     changed = True
+                if nickname and user.nickname != nickname:
+                    user.nickname = nickname
+                    user.save(update_fields=["nickname"])
                 if changed:
                     account.save(update_fields=["email", "extra_data", "updated_at"])
 
@@ -91,6 +94,7 @@ class KakaoLoginView(APIView):
                 user = User.objects.create_user(
                     email=email or f"{nickname}+{kakao_id}@kakao.local",
                     password=None,  # 소셜 계정은 로컬 비밀번호 불필요
+                    nickname=nickname,  # 닉네임 저장
                 )
                 account = SocialAccount.objects.create(
                     user=user,
