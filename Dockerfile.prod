@@ -13,8 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# 정적 파일 수집
-RUN python manage.py collectstatic --noinput
+# 정적 파일 수집 (실패해도 계속 진행)
+RUN python manage.py collectstatic --noinput || true
 
 # 운영 서버 실행 (Gunicorn 멀티 워커)
 CMD ["gunicorn", "stockq.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]
