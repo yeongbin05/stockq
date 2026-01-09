@@ -24,7 +24,7 @@ env = environ.Env()
 environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 FINNHUB_API_KEY = env("FINNHUB_API_KEY")
 SECRET_KEY = env("SECRET_KEY")
-
+OPENAI_API_KEY = env("OPENAI_API_KEY")
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
@@ -80,16 +80,16 @@ MIDDLEWARE = [
     # 이 코드가 왜 맨 위인지 확인
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True
+
 ROOT_URLCONF = 'stockq.urls'
 
 TEMPLATES = [
