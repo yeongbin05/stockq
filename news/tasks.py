@@ -107,4 +107,6 @@ def fetch_favorite_news(self, days: int = 1):
             time.sleep(1)
 
     print(f"[fetch_favorite_news] 완료 → {len(symbols)}개 심볼 처리")
+    from stocks.tasks import daily_news_summary_batch
+    daily_news_summary_batch.delay()
     return results
