@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "drf_spectacular_sidecar",
     "django_celery_beat",
+
 ]
 
 
@@ -173,3 +174,4 @@ CELERY_TASK_TIME_LIMIT = 30 * 60  # 30분 제한
 
 CELERY_TIMEZONE = "Asia/Seoul"
 CELERY_ENABLE_UTC = False
+

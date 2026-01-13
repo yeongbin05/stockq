@@ -5,6 +5,7 @@ from rest_framework import viewsets, mixins, serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
+from rest_framework.pagination import CursorPagination
 from datetime import datetime, timezone
 from django.utils import timezone as django_timezone
 
@@ -84,28 +85,42 @@ class FavoriteStockViewSet(viewsets.GenericViewSet,
         fav.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+class StockCursorPagination(CursorPagination):
+    page_size = 20
+    # Cursor 방식의 핵심: 정렬 기준이 명확해야 다음 이정표(Cursor)를 찾을 수 있습니다.
+    ordering = 'id'
 
 class StockSearchViewSet(viewsets.ViewSet):
     """
-    - GET /api/stocks/search/?q=apple
-      정확 일치(symbol) 우선, 다음 부분 일치(symbol/name)
+    미국 주식 종목 검색 API
+    - 페이지네이션을 적용하여 수만 개의 데이터를 조각내어 가져옵니다.
     """
     permission_classes = [IsAuthenticated]
+    pagination_class = StockCursorPagination
 
     def list(self, request):
         q = request.query_params.get("q", "").strip()
+        
         if not q:
             return Response([])
 
-        exact = list(Stock.objects.filter(symbol__iexact=q))
-        partial = list(Stock.objects.filter(
+        # [변경점] list()로 묶지 않고 'QuerySet' 상태를 유지합니다. 
+        # 이렇게 해야 DB에서 수만 개를 한 번에 안 읽고 딱 20개만 읽어옵니다.
+        queryset = Stock.objects.filter(
             Q(symbol__icontains=q) | Q(name__icontains=q)
-        ).exclude(id__in=[s.id for s in exact]))
+        ).order_by("id")
 
-        queryset = exact + partial
+        # 페이지네이터 실행
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+
+        # 페이지가 있으면 페이지 데이터만 보여주고, 없으면 전체(fallback)를 보여줍니다.
+        if page is not None:
+            serializer = StockSearchSerializer(page, many=True, context={"request": request})
+            return paginator.get_paginated_response(serializer.data)
+
         serializer = StockSearchSerializer(queryset, many=True, context={"request": request})
         return Response(serializer.data)
-
 
 class NewsSummaryViewSet(viewsets.ViewSet):
     """
