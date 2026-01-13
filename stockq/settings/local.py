@@ -36,7 +36,16 @@ INTERNAL_IPS = [ip[:-1] + "1" for ip in ips] + ["127.0.0.1", "10.0.2.2"]
 
 # local.py
 
-# DRF 설정 덮어쓰기: 로컬에서는 인증 없이도 API를 볼 수 있게 만듭니다.
-REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] = [
-    "rest_framework.permissions.AllowAny",
-]
+# stockq/settings/local.py
+import os
+
+# 이 스위치가 있어야만 AllowAny가 허용됨
+if os.getenv("DEBUG_MODE") == "True":
+    REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] = [
+        "rest_framework.permissions.AllowAny",
+    ]
+else:
+    # 서버에서는 무조건 인증 필요
+    REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] = [
+        "rest_framework.permissions.IsAuthenticated",
+    ]
