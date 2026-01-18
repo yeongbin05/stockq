@@ -14,7 +14,7 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: stockq.settings.prod 
     command: >
-      gunicorn stockq.wsgi:application
+      python -m gunicorn stockq.wsgi:application
       --bind 0.0.0.0:8000
       --workers 2
       --access-logfile -
