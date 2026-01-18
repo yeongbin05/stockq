@@ -13,6 +13,13 @@ services:
       - .env
     environment:
       DJANGO_SETTINGS_MODULE: stockq.settings.prod 
+    command: >
+      gunicorn stockq.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers 2
+      --access-logfile -
+      --error-logfile -
+      --log-level info
     depends_on:
       - db
       - redis
@@ -42,7 +49,7 @@ services:
   celery_worker:
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile.prod
     container_name: stockq_celery_worker
     command: celery -A stockq worker -l info
     depends_on:
@@ -58,7 +65,7 @@ services:
   celery_beat:
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile.prod
     container_name: stockq_celery_beat
     command: celery -A stockq beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
     depends_on:
