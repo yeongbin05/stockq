@@ -1,38 +1,23 @@
-# users/views.py
+# users/views/auth.py
 import requests
-from rest_framework import viewsets, permissions
-from rest_framework.decorators import action
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from .models import User,SocialAccount
-from .serializers import UserSerializer
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
-from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework.permissions import AllowAny
-from django.db import transaction
 from django.contrib.auth import get_user_model
+from django.db import transaction
+from rest_framework import status
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
+
+from ..models import SocialAccount
+
 User = get_user_model()
-class IsAdminOrSelf(permissions.BasePermission):
-    def has_object_permission(self, request, view, obj):
-        return request.user.is_staff or obj == request.user
 
-class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all()
-    serializer_class = UserSerializer
 
-    def get_permissions(self):
-        if self.action in ["create"]:  # 회원가입은 공개
-            return [permissions.AllowAny()]
-        if self.action in ["list", "destroy"]:  # 리스트/삭제는 관리자만
-            return [permissions.IsAdminUser()]
-        # retrieve/update/partial_update는 본인만 허용하도록 object permission에서 체크
-        return [permissions.IsAuthenticated(), IsAdminOrSelf()]
-
-    @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
-    def me(self, request):
-        serializer = self.get_serializer(request.user)
-        return Response(serializer.data)
+def safe_json(resp):
+    try:
+        return resp.json()
+    except Exception:
+        return {"text": resp.text, "status_code": resp.status_code}
 
 
 class KakaoLoginView(APIView):
@@ -54,8 +39,8 @@ class KakaoLoginView(APIView):
                 {"detail": "kakao auth failed", "data": safe_json(resp)},
                 status=400,
             )
-        data = resp.json()
 
+        data = resp.json()
         kakao_id = str(data.get("id"))
         if not kakao_id:
             return Response({"detail": "kakao id missing"}, status=400)
@@ -66,7 +51,7 @@ class KakaoLoginView(APIView):
         email = kakao_account.get("email")  # 없을 수 있음
         nickname = profile.get("nickname") or f"kakao_{kakao_id}"
 
-        # 2) DB 매핑 (user_id NULL 문제 해결)
+        # 2) DB 매핑
         with transaction.atomic():
             try:
                 account = SocialAccount.objects.select_for_update().get(
@@ -83,7 +68,7 @@ class KakaoLoginView(APIView):
                 if account.extra_data != data:
                     account.extra_data = data
                     changed = True
-                if nickname and user.nickname != nickname:
+                if nickname and getattr(user, "nickname", None) != nickname:
                     user.nickname = nickname
                     user.save(update_fields=["nickname"])
                 if changed:
@@ -93,8 +78,8 @@ class KakaoLoginView(APIView):
                 # 새 유저 생성
                 user = User.objects.create_user(
                     email=email or f"{nickname}+{kakao_id}@kakao.local",
-                    password=None,  # 소셜 계정은 로컬 비밀번호 불필요
-                    nickname=nickname,  # 닉네임 저장
+                    password=None,
+                    nickname=nickname,
                 )
                 account = SocialAccount.objects.create(
                     user=user,
@@ -105,7 +90,6 @@ class KakaoLoginView(APIView):
                     is_active=True,
                 )
 
-            # 비활성 연결이면 거부
             if not account.is_active:
                 return Response({"detail": "social account is inactive"}, status=403)
 
@@ -122,13 +106,6 @@ class KakaoLoginView(APIView):
         )
 
 
-
-def safe_json(resp):
-    try:
-        return resp.json()
-    except Exception:
-        return {"text": resp.text, "status_code": resp.status_code}
-
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -136,33 +113,24 @@ class LogoutView(APIView):
         try:
             refresh_token = request.data["refresh"]
             token = RefreshToken(refresh_token)
-            token.blacklist()  # ✅ 블랙리스트 처리
+            token.blacklist()
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Exception:
             return Response(status=status.HTTP_400_BAD_REQUEST)
-        
 
 
-class SignoutView(APIView):
+class DeactivateAccountView(APIView):
     permission_classes = [IsAuthenticated]
 
     def delete(self, request):
         user = request.user
-
-        # 콘솔에 어떤 유저가 요청했는지 찍기
-        print("=== SignoutView 요청 유저 ===")
-        print("request.user:", user)           # __str__ -> 보통 username
-        print("타입:", type(user))             # <class 'users.models.User'>
-        print("ID:", user.id)                 # User PK
-        print("Username:", user.username)     # 기본 username
-        if hasattr(user, "nickname"):
-            print("Nickname:", user.nickname) # 커스텀 필드 (있으면 출력)
-
-        # 소프트 딜리트 처리
         user.is_active = False
         user.save(update_fields=["is_active"])
 
+        # username 없을 수 있어서 안전하게 처리
+        identifier = getattr(user, "username", None) or getattr(user, "email", None) or str(user.id)
+
         return Response(
-            {"detail": f"User {user.username} has been deactivated."},
-            status=status.HTTP_200_OK
+            {"detail": f"User {identifier} has been deactivated."},
+            status=status.HTTP_200_OK,
         )

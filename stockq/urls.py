@@ -89,7 +89,10 @@ urlpatterns = [
     path("api/health/", health),   # 공개
     path("api/ping/", ping),       # 인증 필요
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema")),
-    path('api/users/', include('users.urls')),
+    # auth랑 users로 분리
+    path("api/auth/", include("users.urls.auth")),
+    path("api/users/", include("users.urls.users")),
+    
     path('api/news/', include('news.urls')),
     path('api/stocks/', include('stocks.urls')),
     path("api/subscriptions/", include("subscriptions.urls")),
