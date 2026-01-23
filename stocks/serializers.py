@@ -48,18 +48,13 @@ class FavoriteStockSerializer(serializers.ModelSerializer):
 
 
 class StockSearchSerializer(serializers.ModelSerializer):
-    is_favorite = serializers.SerializerMethodField()
+    # 👇 "계산된 값(is_favorite_annotated)을 그냥 갖다 써라"고 변경
+    is_favorite = serializers.BooleanField(source='is_favorite_annotated', default=False, read_only=True)
 
     class Meta:
         model = Stock
         fields = ["id", "symbol", "name", "exchange", "is_favorite"]
-
-    def get_is_favorite(self, obj):
-        user = self.context.get("request").user
-        if not user or user.is_anonymous:
-            return False
-        return FavoriteStock.objects.filter(user=user, stock=obj).exists()
-
+    
 
 class StockBriefSerializer(serializers.ModelSerializer):
     class Meta:
