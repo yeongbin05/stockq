@@ -1,6 +1,7 @@
 from django.db import IntegrityError, transaction
 from rest_framework import serializers, exceptions
-from .models import FavoriteStock, Stock, FavoriteStock
+from .models import FavoriteStock, Stock, FavoriteStock,News
+from rest_framework import serializers
 
 
 class StockDetailSerializer(serializers.ModelSerializer):
@@ -58,3 +59,17 @@ class StockSearchSerializer(serializers.ModelSerializer):
         if not user or user.is_anonymous:
             return False
         return FavoriteStock.objects.filter(user=user, stock=obj).exists()
+
+
+class StockBriefSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Stock
+        fields = ("symbol", "name")
+
+class NewsSerializer(serializers.ModelSerializer):
+    stocks = StockBriefSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = News
+        fields = ("id", "headline", "source", "published_at",
+                  "url", "canonical_url", "stocks")

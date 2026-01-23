@@ -47,7 +47,6 @@ INSTALLED_APPS = [
     'corsheaders',
     'users',
     'stocks',
-    'news',
     'subscriptions',
     "drf_spectacular",
     "drf_spectacular_sidecar",

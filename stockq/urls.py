@@ -92,8 +92,6 @@ urlpatterns = [
     # auth랑 users로 분리
     path("api/auth/", include("users.urls.auth")),
     path("api/users/", include("users.urls.users")),
-    
-    path('api/news/', include('news.urls')),
     path('api/stocks/', include('stocks.urls')),
     path("api/subscriptions/", include("subscriptions.urls")),
     path("api/readiness/", readiness),
