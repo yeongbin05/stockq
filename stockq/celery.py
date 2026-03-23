@@ -13,7 +13,7 @@ app.conf.enable_utc = False
 
 app.conf.beat_schedule = {
     "fetch-news-favorites-kst6": {
-        "task": "news.tasks.fetch_favorite_news",
+        "task": "stocks.tasks.fetch_favorite_news",
         "schedule": crontab(hour=6, minute=0),  # 한국시간 6시 실행
     },
 }

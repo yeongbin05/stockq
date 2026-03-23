@@ -82,6 +82,7 @@ def readiness(request):
 
 
 urlpatterns = [
+    path("", include("django_xbench.urls")),
     path('admin/', admin.site.urls),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),     # JSON
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema")), # Swagger UI
@@ -99,8 +100,8 @@ urlpatterns = [
 ]
 
 
-if settings.DEBUG:
-    import debug_toolbar
-    urlpatterns = [
-        path('__debug__/', include(debug_toolbar.urls)),
-    ] + urlpatterns
+# if settings.DEBUG:
+#     import debug_toolbar
+#     urlpatterns = [
+#         path('__debug__/', include(debug_toolbar.urls)),
+#     ] + urlpatterns

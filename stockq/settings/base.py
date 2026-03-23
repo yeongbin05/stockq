@@ -81,6 +81,9 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
+
+    'django_xbench.middleware.XBenchMiddleware',
+    
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -174,3 +177,29 @@ CELERY_TASK_TIME_LIMIT = 30 * 60  # 30분 제한
 CELERY_TIMEZONE = "Asia/Seoul"
 CELERY_ENABLE_UTC = False
 
+
+# StockQ/settings.py
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+        },
+    },
+    "loggers": {
+        # 👇 패키지 이름(폴더명)에 맞춰 설정
+        "django_xbench": { 
+            "handlers": ["console"],
+            "level": "DEBUG",  # INFO나 DEBUG로 설정해야 보임
+            "propagate": False,
+        },
+    },
+}
+
+XBENCH_ENABLED = True
+XBENCH_SLOW_AGG_ENABLED = True
+
+XBENCH_SLOW_AGG_BUCKET_SECONDS = 10
+XBENCH_SLOW_AGG_BUCKET_COUNT = 60

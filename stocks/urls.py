@@ -1,7 +1,7 @@
 # stocks/urls.py
 from django.urls import path
 from .views import FavoriteStockViewSet, StockSearchViewSet, NewsSummaryViewSet,NewsIngestView,NewsFeedView,NewsSummaryView
-
+from .views import xbench_test
 urlpatterns = [
     # 즐겨찾기 목록 조회 & 추가
     path(
@@ -37,4 +37,5 @@ urlpatterns = [
     path("news/ingest/", NewsIngestView.as_view()), 
     path("news/", NewsFeedView.as_view(), name="news-feed"),
     path("news/summary/", NewsSummaryView.as_view(), name="news-summary"),
+    path('test-xbench/', xbench_test),
 ]

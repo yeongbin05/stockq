@@ -97,7 +97,7 @@ class Price(models.Model):
 
 class Summary(models.Model):
     stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name="summaries")
-    summary = models.TextField()
+    summary = models.JSONField()
     recommendations = models.TextField(blank=True, null=True)  # 선택
     date = models.DateField()  # 요약 기준 날짜
     created_at = models.DateTimeField(auto_now_add=True)
@@ -109,7 +109,49 @@ class Summary(models.Model):
     def __str__(self):
         return f"{self.stock.symbol} - {self.date}"
 
-# stocks/models.py (하단에 추가)
+class SummaryGenerationLog(models.Model):
+    STATUS_CHOICES = [
+        ("success", "Success"),
+        ("no_news", "No News"),
+        ("no_relevant_news", "No Relevant News"),
+        ("failed", "Failed"),
+    ]
+
+    stock = models.ForeignKey(
+        "stocks.Stock",
+        on_delete=models.CASCADE,
+        related_name="summary_generation_logs",
+    )
+    # 요약 날짜
+    date = models.DateField()
+
+    # 필터링 전
+    before_input_tokens = models.PositiveIntegerField(default=0)
+    # 필터링 후
+    after_input_tokens = models.PositiveIntegerField(default=0)
+
+    raw_count = models.PositiveIntegerField(default=0)
+    relevant_count = models.PositiveIntegerField(default=0)
+
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES)
+    # 처리 시간
+    elapsed_ms = models.PositiveIntegerField(default=0)
+
+    error_message = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "summary_generation_logs"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["stock", "date"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.stock.symbol} | {self.date} | {self.status}"
 
 class DailyUserNews(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
