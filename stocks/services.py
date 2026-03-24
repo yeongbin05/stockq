@@ -9,7 +9,7 @@ from django.conf import settings
 from django.db import transaction
 
 from .models import Stock, News, NewsStock,DailyUserNews
-
+from .utils import wait_for_slot,normalize_url, make_url_hash
 
 FINNHUB_COMPANY_NEWS = "https://finnhub.io/api/v1/company-news"
 UTC = timezone.utc
@@ -66,6 +66,8 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
     Finnhub에서 symbol 뉴스 가져와 stocks.News/NewsStock에 업서트.
     반환: {"created_news": X, "linked_pairs": Y, "skipped": Z}
     """
+    if not wait_for_slot("rate_limit:finnhub", capacity=5, rate=1):
+        raise Exception(f"Rate limit wait timeout: {symbol}")
     data = fetch_company_news(symbol, days)
     created_news = 0
     linked_pairs = 0
@@ -85,8 +87,8 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
             skipped += 1
             continue
 
-        canonical = canonicalize_url(raw_url)
-        url_hash = sha256(canonical)
+        canonical = normalize_url(raw_url)
+        url_hash = make_url_hash(raw_url)
 
         # published_at: finnhub "datetime"는 epoch(sec)
         ts = item.get("datetime")
