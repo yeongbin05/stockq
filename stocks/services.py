@@ -3,7 +3,8 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from django.utils.timezone import now
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
-
+import random
+import time
 import requests
 from django.conf import settings
 from django.db import transaction
@@ -48,17 +49,42 @@ def _date_range(days: int):
     to = now.strftime("%Y-%m-%d")
     return frm, to
 
-def fetch_company_news(symbol: str, days: int = 1):
+def fetch_company_news(symbol: str, days: int = 1, max_retries: int = 5):
     if not settings.FINNHUB_API_KEY:
         raise RuntimeError("FINNHUB_API_KEY not set")
+
     frm, to = _date_range(days)
-    r = requests.get(
-        FINNHUB_COMPANY_NEWS,
-        params={"symbol": symbol, "from": frm, "to": to, "token": settings.FINNHUB_API_KEY},
-        timeout=10,
-    )
-    r.raise_for_status()
-    return r.json()  # list[dict]
+
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(
+                FINNHUB_COMPANY_NEWS,
+                params={
+                    "symbol": symbol,
+                    "from": frm,
+                    "to": to,
+                    "token": settings.FINNHUB_API_KEY,
+                },
+                timeout=10,
+            )
+
+            if r.status_code == 200:
+                return r.json()
+
+            if r.status_code == 429:
+                if attempt == max_retries - 1:
+                    raise Exception(f"Finnhub 429 Too Many Requests: {symbol}")
+                time.sleep((2 ** attempt) + random.uniform(0, 0.5))
+                continue
+
+            r.raise_for_status()
+
+        except requests.RequestException as e:
+            if attempt == max_retries - 1:
+                raise Exception(f"Finnhub request failed: {symbol}, error={e}")
+            time.sleep((2 ** attempt) + random.uniform(0, 0.5))
+
+    raise Exception(f"Finnhub fetch failed after retries: {symbol}")
 
 @transaction.atomic
 def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
