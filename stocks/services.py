@@ -8,7 +8,10 @@ import time
 import requests
 from django.conf import settings
 from django.db import transaction
+import logging
 
+
+logger = logging.getLogger(__name__)
 from .models import Stock, News, NewsStock,DailyUserNews
 from .utils import wait_for_slot,normalize_url, make_url_hash
 
@@ -69,20 +72,51 @@ def fetch_company_news(symbol: str, days: int = 1, max_retries: int = 5):
             )
 
             if r.status_code == 200:
+                if attempt > 0:
+                    logger.warning(
+                        "[finnhub_retry_success] symbol=%s attempt=%s",
+                        symbol,
+                        attempt + 1,
+                    )
                 return r.json()
 
             if r.status_code == 429:
+                sleep_seconds = (2 ** attempt) + random.uniform(0, 0.5)
+                logger.warning(
+                    "[finnhub_429] symbol=%s attempt=%s sleep=%.2f",
+                    symbol,
+                    attempt + 1,
+                    sleep_seconds,
+                )
+
                 if attempt == max_retries - 1:
                     raise Exception(f"Finnhub 429 Too Many Requests: {symbol}")
-                time.sleep((2 ** attempt) + random.uniform(0, 0.5))
+
+                time.sleep(sleep_seconds)
                 continue
 
+            logger.error(
+                "[finnhub_http_error] symbol=%s status=%s body=%s",
+                symbol,
+                r.status_code,
+                r.text[:200],
+            )
             r.raise_for_status()
 
         except requests.RequestException as e:
+            sleep_seconds = (2 ** attempt) + random.uniform(0, 0.5)
+            logger.warning(
+                "[finnhub_request_error] symbol=%s attempt=%s sleep=%.2f error=%s",
+                symbol,
+                attempt + 1,
+                sleep_seconds,
+                e,
+            )
+
             if attempt == max_retries - 1:
                 raise Exception(f"Finnhub request failed: {symbol}, error={e}")
-            time.sleep((2 ** attempt) + random.uniform(0, 0.5))
+
+            time.sleep(sleep_seconds)
 
     raise Exception(f"Finnhub fetch failed after retries: {symbol}")
 
