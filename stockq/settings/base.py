@@ -165,6 +165,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'users.User'
 
 
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", REDIS_URL)
