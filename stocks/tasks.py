@@ -326,6 +326,6 @@ def measure_pipeline_for_symbol(symbol: str, days: int = 1):
     return result
 
 
-
+@shared_task
 def sentry_test_task():
     raise RuntimeError("Sentry test from Celery")
