@@ -324,3 +324,8 @@ def measure_pipeline_for_symbol(symbol: str, days: int = 1):
 
     logger.info(f"[measure_pipeline] {result}")
     return result
+
+
+
+def sentry_test_task():
+    raise RuntimeError("Sentry test from Celery")
