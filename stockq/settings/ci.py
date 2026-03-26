@@ -5,9 +5,9 @@ DEBUG = False
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "stockq",
-        "USER": "stockq",
-        "PASSWORD": "stockq123",
+        "NAME": "ci_db",
+        "USER": "ci_user",
+        "PASSWORD": "ci_password",
         "HOST": "db",   # docker-compose 서비스 이름
         "PORT": 5432,
     }
@@ -19,4 +19,4 @@ PASSWORD_HASHERS = [
 ]
 
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
-FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "dummy-ci-key")
+FINNHUB_API_KEY = "dummy-ci-key"
