@@ -66,6 +66,9 @@ REST_FRAMEWORK = {
     ),
     "EXCEPTION_HANDLER": "config.exception_handlers.custom_exception_handler",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_RENDERER_CLASSES": [
+        "rest_framework.renderers.JSONRenderer",
+    ],
 }
 
 # 문서 메타데이터
