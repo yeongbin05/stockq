@@ -9,6 +9,7 @@ from stocks.services import upsert_news_for_symbol
 from stocks.models import Stock, News,Summary,FavoriteStock,SummaryGenerationLog
 from time import perf_counter
 from stocks.utils import score_news_relevance
+
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -36,20 +37,26 @@ def fetch_favorite_news(self, days: int = 1):
     )
 
     results = []
+    success_symbols = []
+    failed_symbols = []
+
     for symbol in symbols:
         try:
             res = upsert_news_for_symbol(symbol, days=days)
             results.append({"symbol": symbol, **res})
+
+            generate_summary_for_stock.delay(symbol)
+            success_symbols.append(symbol)
+
         except Exception as e:
             results.append({"symbol": symbol, "error": str(e)})
-        finally:
-            pass  # Finnhub 1초 1회면 유지
+            failed_symbols.append(symbol)
 
-    # 요약 배치 호출 (아래 2번에서 stocks로 옮기는 걸 추천)
-    from stocks.tasks import daily_news_summary_batch
-    daily_news_summary_batch.delay()
-
-    return results
+    return {
+        "results": results,
+        "success_symbols": success_symbols,
+        "failed_symbols": failed_symbols,
+    }
 
 def estimate_token_count(text: str) -> int:
     if not text:
@@ -226,7 +233,7 @@ def _generate_summary_for_stock(symbol: str, target_date=None):
             elapsed_ms=int((perf_counter() - t0) * 1000),
             error_message=str(e),
         )
-        return {"error": "openai_call_failed"}
+        raise
 
     summary_text = response.choices[0].message.content
     try:
@@ -244,7 +251,7 @@ def _generate_summary_for_stock(symbol: str, target_date=None):
             elapsed_ms=int((perf_counter() - t0) * 1000),
             error_message=f"json_parse_failed: {str(e)}",
         )
-        return {"error": "json_parse_failed"}
+        raise
 
     Summary.objects.update_or_create(
         stock=stock,
@@ -276,8 +283,8 @@ def _generate_summary_for_stock(symbol: str, target_date=None):
         "raw_count": raw_count,
         "relevant_count": relevant_count,
     }
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
 
+@shared_task(bind=True, max_retries=3)
 def generate_summary_for_stock(self, symbol: str):
     try:
         return _generate_summary_for_stock(symbol)
@@ -286,17 +293,8 @@ def generate_summary_for_stock(self, symbol: str):
         return {"error": f"Stock {symbol} not found"}
     except Exception as e:
         logger.error(f"[generate_summary] {symbol} 요약 실패: {e}")
-        raise self.retry(countdown=60)
+        raise self.retry(exc=e, countdown=60)
     
-@shared_task
-def daily_news_summary_batch():
-    # 1. 유저가 아니라 '구독된 종목들'의 목록을 뽑습니다 (중복 제거)
-    active_symbols = FavoriteStock.objects.values_list('stock__symbol', flat=True).distinct()
-    
-    # 2. 종목 개수만큼만 루프를 돕니다
-    for symbol in active_symbols:
-        # "이 종목 요약해줘" (딱 1번 실행)
-        generate_summary_for_stock.delay(symbol)
 
 
 

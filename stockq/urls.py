@@ -84,12 +84,9 @@ def readiness(request):
 urlpatterns = [
     path("", include("django_xbench.urls")),
     path('admin/', admin.site.urls),
-    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),     # JSON
-    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema")), # Swagger UI
 
     path("api/health/", health),   # 공개
     path("api/ping/", ping),       # 인증 필요
-    path("api/redoc/", SpectacularRedocView.as_view(url_name="schema")),
     # auth랑 users로 분리
     path("api/auth/", include("users.urls.auth")),
     path("api/users/", include("users.urls.users")),
@@ -99,7 +96,12 @@ urlpatterns = [
 
 ]
 
-
+if settings.DEBUG:
+    urlpatterns += [
+        path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+        path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+        path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
+    ]
 # if settings.DEBUG:
 #     import debug_toolbar
 #     urlpatterns = [
