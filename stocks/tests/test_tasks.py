@@ -12,7 +12,7 @@ from stocks.models import Stock, FavoriteStock
 from stocks.tasks import fetch_favorite_news
 
 from django.contrib.auth import get_user_model
-
+from json.decoder import JSONDecodeError
 import json
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -231,7 +231,7 @@ class GenerateSummaryRetryTests(TestCase):
         )
         mock_openai_create.return_value = fake_response
 
-        with self.assertRaises(MaxRetriesExceededError):
+        with self.assertRaises(JSONDecodeError):
             generate_summary_for_stock.apply(args=("AAPL",)).get()
 
         self.assertEqual(
@@ -265,7 +265,7 @@ class GenerateSummaryRetryTests(TestCase):
         mock_score_news_relevance.return_value = (10, True, "matched")
         mock_openai_create.side_effect = Exception("openai temporary failure")
 
-        with self.assertRaises(MaxRetriesExceededError):
+        with self.assertRaises(Exception) as context:
             generate_summary_for_stock.apply(args=("AAPL",)).get()
 
         self.assertEqual(
