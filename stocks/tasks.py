@@ -40,12 +40,24 @@ def fetch_favorite_news(self, days: int = 1):
     success_symbols = []
     failed_symbols = []
 
+    today = timezone.localdate()
+
     for symbol in symbols:
         try:
             res = upsert_news_for_symbol(symbol, days=days)
             results.append({"symbol": symbol, **res})
+            
+            has_new_input = (
+                res.get("created_news", 0) > 0 or
+                res.get("linked_pairs", 0) > 0
+            )
 
-            if res.get("created_news", 0) > 0 or res.get("linked_pairs", 0) > 0:
+            summary_exists_today = Summary.objects.filter(
+                stock__symbol__iexact=symbol,
+                date=today,
+            ).exists()
+
+            if has_new_input and not summary_exists_today:
                 generate_summary_for_stock.delay(symbol)
 
             success_symbols.append(symbol)
