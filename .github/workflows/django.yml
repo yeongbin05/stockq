@@ -18,6 +18,9 @@ jobs:
           echo "FINNHUB_API_KEY=dummy-finnhub-key" >> .env
           echo "OPENAI_API_KEY=dummy-openai-key" >> .env
           echo "SECRET_KEY=dummy-secret-key" >> .env
+          echo "POSTGRES_DB=ci_db" >> .env
+          echo "POSTGRES_USER=ci_user" >> .env
+          echo "POSTGRES_PASSWORD=ci_password" >> .env
 
       - name: Run CI with Docker Compose
         run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml up --build --exit-code-from web web
