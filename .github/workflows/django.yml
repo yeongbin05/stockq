@@ -20,7 +20,7 @@ jobs:
           echo "SECRET_KEY=dummy-secret-key" >> .env
 
       - name: Run CI with Docker Compose
-        run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml up --build --exit-code-from web
+        run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml up --build --exit-code-from web web
 
       - name: Show logs
         if: always()
