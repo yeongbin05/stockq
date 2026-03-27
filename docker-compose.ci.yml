@@ -2,27 +2,25 @@ services:
   db:
     image: postgres:17
     environment:
-        POSTGRES_DB: ci_db
-        POSTGRES_USER: ci_user
-        POSTGRES_PASSWORD: ci_password
+      POSTGRES_DB: ci_db
+      POSTGRES_USER: ci_user
+      POSTGRES_PASSWORD: ci_password
     ports:
       - "5432:5432"
-    volumes:
-      - db_data_ci:/var/lib/postgresql/data
 
   redis:
     image: redis:7
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data_ci:/data
 
-  migrate:
+  web:
     build:
       context: .
       dockerfile: Dockerfile.dev
     command: >
-      sh -c "./scripts/wait-for-db.sh && python manage.py migrate"
+      sh -c "./scripts/wait-for-db.sh &&
+             python manage.py migrate &&
+             python manage.py test --keepdb"
     environment:
       DJANGO_SETTINGS_MODULE: stockq.settings.ci
     env_file:
@@ -30,49 +28,3 @@ services:
     depends_on:
       - db
       - redis
-
-  web:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    command: >
-      sh -c "./scripts/wait-for-db.sh && python manage.py test --keepdb"
-    environment:
-      DJANGO_SETTINGS_MODULE: stockq.settings.ci
-    env_file:
-      - .env
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-
-  celery_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    command: >
-      sh -c "./scripts/wait-for-db.sh && celery -A stockq worker -l info"
-    environment:
-      DJANGO_SETTINGS_MODULE: stockq.settings.ci
-    env_file:
-      - .env
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-
-  celery_beat:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    command: >
-      sh -c "./scripts/wait-for-db.sh && celery -A stockq beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
-    environment:
-      DJANGO_SETTINGS_MODULE: stockq.settings.ci
-    env_file:
-      - .env
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-
-volumes:
-  db_data_ci:
-  redis_data_ci:
