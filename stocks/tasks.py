@@ -45,7 +45,9 @@ def fetch_favorite_news(self, days: int = 1):
             res = upsert_news_for_symbol(symbol, days=days)
             results.append({"symbol": symbol, **res})
 
-            generate_summary_for_stock.delay(symbol)
+            if res.get("created_news", 0) > 0 or res.get("linked_pairs", 0) > 0:
+                generate_summary_for_stock.delay(symbol)
+
             success_symbols.append(symbol)
 
         except Exception as e:
