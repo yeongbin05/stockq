@@ -39,6 +39,7 @@ def fetch_favorite_news(self, days: int = 1):
     results = []
     success_symbols = []
     failed_symbols = []
+    enqueued_symbols = []
 
     today = timezone.localdate()
 
@@ -59,6 +60,7 @@ def fetch_favorite_news(self, days: int = 1):
 
             if has_new_input and not summary_exists_today:
                 generate_summary_for_stock.delay(symbol)
+                enqueued_symbols.append(symbol)
 
             success_symbols.append(symbol)
 
@@ -70,6 +72,7 @@ def fetch_favorite_news(self, days: int = 1):
         "results": results,
         "success_symbols": success_symbols,
         "failed_symbols": failed_symbols,
+        "enqueued_symbols": enqueued_symbols,
     }
 
 def estimate_token_count(text: str) -> int:
