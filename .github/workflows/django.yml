@@ -13,11 +13,6 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
-
       - name: Create .env file from secrets
         run: |
           echo "FINNHUB_API_KEY=${{ secrets.FINNHUB_API_KEY }}" >> .env
@@ -27,10 +22,13 @@ jobs:
           echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" >> .env
           echo "SECRET_KEY=${{ secrets.SECRET_KEY }}" >> .env
 
-      # ✅ dev + ci 함께 실행 (한 번만)
       - name: Run CI with Docker Compose
-        run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml up --build --abort-on-container-exit
+        run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml up --build --exit-code-from web
+
+      - name: Show logs
+        if: always()
+        run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml logs
 
       - name: Stop containers
         if: always()
-        run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml down
+        run: docker compose -f docker-compose.dev.yml -f docker-compose.ci.yml down -v

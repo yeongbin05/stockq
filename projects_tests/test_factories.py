@@ -1,5 +1,5 @@
 import pytest
-from tests.factories import UserFactory, StockFactory, FavoriteStockFactory
+from projects_tests.factories import UserFactory, StockFactory, FavoriteStockFactory
 
 @pytest.mark.django_db
 def test_user_factory_creates_user():
