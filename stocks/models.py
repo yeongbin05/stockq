@@ -178,6 +178,8 @@ class SummaryJob(models.Model):
         SUCCESS = "success", "Success"
         FAILED = "failed", "Failed"
         RETRY_WAIT = "retry_wait", "Retry Wait"
+        NO_NEWS = "no_news", "No News"
+        NO_RELEVANT_NEWS = "no_relevant_news", "No Relevant News"
 
     stock = models.ForeignKey(
         "stocks.Stock",
@@ -191,7 +193,11 @@ class SummaryJob(models.Model):
         default=Status.PENDING,
     )
     retry_count = models.PositiveIntegerField(default=0)
-    last_error = models.TextField(blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

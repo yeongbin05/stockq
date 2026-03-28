@@ -72,7 +72,7 @@ def fetch_favorite_news(self, days: int = 1):
 
         except Exception as e:
             results.append({"symbol": symbol, "error": str(e)})
-            failed_symbols.append(symbol)
+            failed_symbols.append({"symbol": symbol, "error": str(e)})
 
     return {
         "results": results,
@@ -336,7 +336,7 @@ def _generate_summary_for_stock(job_id: int):
 def generate_summary_for_stock(self, job_id: int):
     try:
         return _generate_summary_for_stock(job_id)
-    except Stock.DoesNotExist:
+    except SummaryJob.DoesNotExist:
         logger.error(f"[generate_summary] SummaryJob {job_id} not found")
         return {"error": f"SummaryJob {job_id} not found"}
     except Exception as e:
@@ -355,7 +355,6 @@ def measure_pipeline_for_symbol(symbol: str, days: int = 1):
     kst = ZoneInfo("Asia/Seoul")
     target_date = timezone.now().astimezone(kst).date() - timedelta(days=days - 1)
 
-    summary_result = _generate_summary_for_stock(symbol, target_date=target_date)
     t2 = perf_counter()
 
     result = {
@@ -365,7 +364,7 @@ def measure_pipeline_for_symbol(symbol: str, days: int = 1):
         "summary_elapsed": round(t2 - t1, 2),
         "total_elapsed": round(t2 - t0, 2),
         "fetch_result": fetch_result,
-        "summary_result": summary_result,
+       
     }
 
     logger.info(f"[measure_pipeline] {result}")
