@@ -92,10 +92,6 @@ def _generate_summary_for_stock(job_id: int):
     stock = job.stock
     symbol = stock.symbol
     target_date = job.date
-
-    job.status = SummaryJob.Status.RUNNING
-    job.started_at = timezone.now()
-    job.save(update_fields=["status", "started_at"])
    
     if not settings.OPENAI_API_KEY:
         logger.error("[generate_summary] OPENAI_API_KEY not set")
