@@ -182,7 +182,6 @@ CELERY_TASK_TIME_LIMIT = 30 * 60  # 30분 제한
 CELERY_TIMEZONE = "Asia/Seoul"
 CELERY_ENABLE_UTC = False
 
-
 # StockQ/settings.py
 
 LOGGING = {
