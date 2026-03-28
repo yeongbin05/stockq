@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import openai,json,logging
 from django.contrib.auth import get_user_model
 from stocks.services import upsert_news_for_symbol  
-from stocks.models import Stock, News,Summary,FavoriteStock,SummaryGenerationLog
+from stocks.models import Stock, News,Summary,FavoriteStock,SummaryGenerationLog,SummaryJob
 from time import perf_counter
 from stocks.utils import score_news_relevance
 
@@ -59,8 +59,14 @@ def fetch_favorite_news(self, days: int = 1):
             ).exists()
 
             if has_new_input and not summary_exists_today:
-                generate_summary_for_stock.delay(symbol)
-                enqueued_symbols.append(symbol)
+                stock = Stock.objects.get(symbol__iexact=symbol)
+                _, created = SummaryJob.objects.get_or_create(
+                    stock=stock,
+                    date=today,
+                    defaults={"status": SummaryJob.Status.PENDING},
+                )
+                if created:
+                    enqueued_symbols.append(symbol)
 
             success_symbols.append(symbol)
 
@@ -80,20 +86,28 @@ def estimate_token_count(text: str) -> int:
         return 0
     return max(1, len(text) // 4)
 
-def _generate_summary_for_stock(symbol: str, target_date=None):
-    """
-    실제 요약 생성 로직
-    Celery task와 측정 함수에서 공용으로 사용
-    """
+def _generate_summary_for_stock(job_id: int):
+    job = SummaryJob.objects.select_related("stock").get(id=job_id)
+    stock = job.stock
+    symbol = stock.symbol
+    target_date = job.date
+
+    job.status = SummaryJob.Status.RUNNING
+    job.started_at = timezone.now()
+    job.save(update_fields=["status", "started_at"])
+   
     if not settings.OPENAI_API_KEY:
         logger.error("[generate_summary] OPENAI_API_KEY not set")
-        return {"error": "OpenAI API key not configured"}
+        job.status = SummaryJob.Status.FAILED
+        job.finished_at = timezone.now()
+        job.error_message = "OpenAI API key not configured"
+        job.save(update_fields=["status", "finished_at", "error_message"])
+        return {"error": "OpenAI API key not configured", "job_id": job_id}
 
     openai.api_key = settings.OPENAI_API_KEY
    
 
     target_date, start_utc, end_utc = _get_utc_range_from_kst_date(target_date)
-    stock = Stock.objects.get(symbol__iexact=symbol)
 
     news_query = News.objects.filter(
         stocks__symbol__iexact=symbol,
@@ -102,7 +116,6 @@ def _generate_summary_for_stock(symbol: str, target_date=None):
     ).order_by("-published_at")[:10]
 
     raw_count = news_query.count()
-    logger.info(f"[generate_summary] symbol={symbol} raw_count={raw_count}")
 
     if raw_count == 0:
         SummaryGenerationLog.objects.create(
@@ -115,8 +128,11 @@ def _generate_summary_for_stock(symbol: str, target_date=None):
             status="no_news",
             elapsed_ms=0,
         )
-        logger.info(f"[generate_summary] {symbol}: 오늘 뉴스가 없어 요약 생략")
-        return {"message": "No news found"}
+
+        job.status = SummaryJob.Status.NO_NEWS
+        job.finished_at = timezone.now()
+        job.save(update_fields=["status", "finished_at"])
+        return {"message": "No news found", "job_id": job_id}
 
     scored_news = []
     for news in news_query:
@@ -223,8 +239,12 @@ def _generate_summary_for_stock(symbol: str, target_date=None):
             status="no_relevant_news",
             elapsed_ms=0,
         )
+        job.status = SummaryJob.Status.NO_RELEVANT_NEWS
+        job.finished_at = timezone.now()
+        job.save(update_fields=["status", "finished_at"])
+
         logger.info(f"[generate_summary] {symbol}: 관련 뉴스가 없어 요약 생략")
-        return {"message": "No relevant news found"}
+        return {"message": "No relevant news found", "job_id": job_id}
     
     t0 = perf_counter()
     try:
@@ -250,6 +270,10 @@ def _generate_summary_for_stock(symbol: str, target_date=None):
             elapsed_ms=int((perf_counter() - t0) * 1000),
             error_message=str(e),
         )
+        job.status = SummaryJob.Status.FAILED
+        job.finished_at = timezone.now()
+        job.error_message = str(e)
+        job.save(update_fields=["status", "finished_at", "error_message"])
         raise
 
     summary_text = response.choices[0].message.content
@@ -268,6 +292,10 @@ def _generate_summary_for_stock(symbol: str, target_date=None):
             elapsed_ms=int((perf_counter() - t0) * 1000),
             error_message=f"json_parse_failed: {str(e)}",
         )
+        job.status = SummaryJob.Status.FAILED
+        job.finished_at = timezone.now()
+        job.error_message = f"json_parse_failed: {str(e)}"
+        job.save(update_fields=["status", "finished_at", "error_message"])
         raise
 
     Summary.objects.update_or_create(
@@ -292,8 +320,11 @@ def _generate_summary_for_stock(symbol: str, target_date=None):
     logger.info(
         f"[generate_summary] symbol={symbol} llm_and_save_elapsed={t1 - t0:.2f}s"
     )
-
+    job.status = SummaryJob.Status.SUCCESS
+    job.finished_at = timezone.now()
+    job.save(update_fields=["status", "finished_at"])
     return {
+        "job_id": job_id,
         "symbol": symbol,
         "status": "success",
         "elapsed": round(t1 - t0, 2),
@@ -302,14 +333,14 @@ def _generate_summary_for_stock(symbol: str, target_date=None):
     }
 
 @shared_task(bind=True, max_retries=3)
-def generate_summary_for_stock(self, symbol: str):
+def generate_summary_for_stock(self, job_id: int):
     try:
-        return _generate_summary_for_stock(symbol)
+        return _generate_summary_for_stock(job_id)
     except Stock.DoesNotExist:
-        logger.error(f"[generate_summary] Stock {symbol} not found in DB")
-        return {"error": f"Stock {symbol} not found"}
+        logger.error(f"[generate_summary] SummaryJob {job_id} not found")
+        return {"error": f"SummaryJob {job_id} not found"}
     except Exception as e:
-        logger.error(f"[generate_summary] {symbol} 요약 실패: {e}")
+        logger.error(f"[generate_summary] job_id={job_id} 요약 실패: {e}")
         raise self.retry(exc=e, countdown=60)
     
 
