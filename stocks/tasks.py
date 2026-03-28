@@ -9,6 +9,7 @@ from stocks.services import upsert_news_for_symbol
 from stocks.models import Stock, News,Summary,FavoriteStock,SummaryGenerationLog,SummaryJob
 from time import perf_counter
 from stocks.utils import score_news_relevance
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -371,3 +372,30 @@ def measure_pipeline_for_symbol(symbol: str, days: int = 1):
     return result
 
 
+
+@shared_task
+def dispatch_summary_jobs(limit: int = 20):
+    dispatched_job_ids = []
+
+    with transaction.atomic():
+        jobs = list(
+            SummaryJob.objects
+            .select_for_update(skip_locked=True)
+            .filter(status=SummaryJob.Status.PENDING)
+            .order_by("created_at")[:limit]
+        )
+
+        for job in jobs:
+            job.status = SummaryJob.Status.RUNNING
+            job.started_at = timezone.now()
+            job.error_message = ""
+            job.save(update_fields=["status", "started_at", "error_message", "updated_at"])
+            dispatched_job_ids.append(job.id)
+
+    for job_id in dispatched_job_ids:
+        generate_summary_for_stock.delay(job_id)
+
+    return {
+        "dispatched_count": len(dispatched_job_ids),
+        "job_ids": dispatched_job_ids,
+    }
