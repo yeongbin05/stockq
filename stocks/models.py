@@ -1,7 +1,7 @@
 # stocks/models.py
 from django.db import models
 from django.conf import settings
-
+from django.utils import timezone
 
 class Stock(models.Model):
     symbol = models.CharField(max_length=10, unique=True)  # e.g., AAPL
@@ -166,3 +166,46 @@ class DailyUserNews(models.Model):
 
     def __str__(self):
         return f"{self.user} - {self.stock.symbol} - {self.date}"
+
+
+
+
+
+class SummaryJob(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+        RETRY_WAIT = "retry_wait", "Retry Wait"
+
+    stock = models.ForeignKey(
+        "stocks.Stock",
+        on_delete=models.CASCADE,
+        related_name="summary_jobs",
+    )
+    date = models.DateField()
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    retry_count = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["stock", "date"],
+                name="uniq_summary_job_stock_date",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["status", "date"]),
+            models.Index(fields=["stock", "date"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.stock.symbol} | {self.date} | {self.status}"

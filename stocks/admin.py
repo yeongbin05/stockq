@@ -33,3 +33,24 @@ class PriceAdmin(admin.ModelAdmin):
 class SummaryAdmin(admin.ModelAdmin):
     list_display = ("id", "stock", "date")
     list_filter = ("stock",)
+
+
+
+from django.contrib import admin
+from .models import SummaryJob
+
+
+@admin.register(SummaryJob)
+class SummaryJobAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "stock",
+        "date",
+        "status",
+        "retry_count",
+        "updated_at",
+        "created_at",
+    )
+    list_filter = ("status", "date")
+    search_fields = ("stock__symbol", "stock__name")
+    ordering = ("-date", "-created_at")
