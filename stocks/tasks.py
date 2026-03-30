@@ -37,6 +37,99 @@ def _get_utc_range_from_kst_date(target_date=None):
 
     return target_date, start_utc, end_utc
 
+
+QUEUE_START_TIMEOUT = timedelta(minutes=2)
+RUNNING_EXEC_TIMEOUT = timedelta(minutes=10)
+MAX_STUCK_RECOVERY_RETRIES = 3
+
+RETRY_BACKOFF_MINUTES = {
+    0: 1,
+    1: 5,
+    2: 15,
+}
+
+
+def _get_retry_backoff_minutes(retry_count: int) -> int:
+    return RETRY_BACKOFF_MINUTES.get(retry_count, 15)
+
+
+@shared_task
+def recover_stuck_summary_jobs():
+    now = timezone.now()
+
+    queue_start_deadline = now - QUEUE_START_TIMEOUT
+    running_exec_deadline = now - RUNNING_EXEC_TIMEOUT
+
+    stuck_jobs = list(
+        SummaryJob.objects.filter(
+            status=SummaryJob.Status.RUNNING,
+            finished_at__isnull=True,
+        ).filter(
+            Q(
+                started_at__isnull=True,
+                dispatched_at__isnull=False,
+                dispatched_at__lte=queue_start_deadline,
+            ) |
+            Q(
+                started_at__isnull=False,
+                started_at__lte=running_exec_deadline,
+            )
+        ).values("id", "retry_count", "lease_token")
+    )
+
+    recovered_job_ids = []
+    failed_job_ids = []
+
+    for job in stuck_jobs:
+        job_id = job["id"]
+        retry_count = job["retry_count"]
+        lease_token = job["lease_token"]
+
+        if lease_token is None:
+            continue
+
+        if retry_count >= MAX_STUCK_RECOVERY_RETRIES:
+            updated = SummaryJob.objects.filter(
+                id=job_id,
+                status=SummaryJob.Status.RUNNING,
+                lease_token=lease_token,
+                finished_at__isnull=True,
+            ).update(
+                status=SummaryJob.Status.FAILED,
+                finished_at=now,
+                error_message="stuck timeout exceeded max retries",
+            )
+            if updated:
+                failed_job_ids.append(job_id)
+            continue
+
+        backoff_minutes = _get_retry_backoff_minutes(retry_count)
+
+        updated = SummaryJob.objects.filter(
+            id=job_id,
+            status=SummaryJob.Status.RUNNING,
+            lease_token=lease_token,
+            finished_at__isnull=True,
+        ).update(
+            status=SummaryJob.Status.RETRY_WAIT,
+            retry_count=retry_count + 1,
+            retry_at=now + timedelta(minutes=backoff_minutes),
+            started_at=None,
+            finished_at=None,
+            dispatched_at=None,
+            lease_token=None,
+            error_message="stuck timeout recovery",
+        )
+
+        if updated:
+            recovered_job_ids.append(job_id)
+
+    return {
+        "recovered_job_ids": recovered_job_ids,
+        "failed_job_ids": failed_job_ids,
+    }
+
+
 @shared_task(bind=True)
 def fetch_favorite_news(self, days: int = 1):
     symbols = (
