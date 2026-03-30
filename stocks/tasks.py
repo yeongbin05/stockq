@@ -1,20 +1,24 @@
+import openai,json,logging,uuid
 from celery import shared_task
-from django.conf import settings
+from celery.exceptions import Retry
 from datetime import datetime, timedelta,time, timezone as dt_timezone
-from django.utils import timezone
-from zoneinfo import ZoneInfo
-import openai,json,logging
-from django.contrib.auth import get_user_model
-from stocks.services import upsert_news_for_symbol  
-from stocks.models import Stock, News,Summary,FavoriteStock,SummaryGenerationLog,SummaryJob
-from time import perf_counter
-from stocks.utils import score_news_relevance
 from django.db import transaction
 from django.db.models import Q
-import uuid
-
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+from stocks.services import upsert_news_for_symbol  
+from stocks.models import Stock, News,Summary,FavoriteStock,SummaryGenerationLog,SummaryJob
+from stocks.utils import score_news_relevance
+from stocks.rate_limit import get_openai_bucket
+from time import perf_counter
+from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+def acquire_openai_token():
+    bucket = get_openai_bucket()
+    return bucket.consume(tokens=1)
 
 def _is_current_lease(job_id: int, lease_token: str) -> bool:
     return SummaryJob.objects.filter(
@@ -189,7 +193,7 @@ def estimate_token_count(text: str) -> int:
         return 0
     return max(1, len(text) // 4)
 
-def _generate_summary_for_stock(job_id: int,lease_token: str):
+def _generate_summary_for_stock(self,job_id: int,lease_token: str):
     job = SummaryJob.objects.select_related("stock").get(id=job_id)
     stock = job.stock
     symbol = stock.symbol
@@ -369,6 +373,38 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             "status": "stale_before_llm",
         }
     try:
+        bucket = get_openai_bucket()
+        bucket_result = bucket.consume(tokens=1)
+
+        if not bucket_result.allowed:
+            retry_at = timezone.now() + timedelta(seconds=bucket_result.retry_after_seconds)
+
+            logger.warning(
+                "[generate_summary] OpenAI bucket exceeded for %s. retry_after=%ss remaining=%s",
+                stock.symbol,
+                bucket_result.retry_after_seconds,
+                bucket_result.remaining_tokens,
+            )
+
+            SummaryJob.objects.filter(
+                id=job_id,
+                status=SummaryJob.Status.RUNNING,
+                lease_token=lease_token,
+            ).update(
+                status=SummaryJob.Status.RETRY_WAIT,
+                retry_at=retry_at,
+                started_at=None,
+                finished_at=None,
+                dispatched_at=None,
+                lease_token=None,
+                error_message="rate limited by openai bucket",
+            )
+
+            return {
+                "job_id": job_id,
+                "status": "rate_limited",
+                "retry_after": bucket_result.retry_after_seconds,
+            }
         response = openai.chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=[
@@ -378,6 +414,8 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             max_tokens=1200,
             temperature=0.2
         )
+    except Retry:
+        raise
     except Exception as e:
         logger.error(f"OpenAI call failed: {e}")
         SummaryGenerationLog.objects.create(
@@ -491,7 +529,7 @@ def generate_summary_for_stock(self, job_id: int, lease_token: str):
             "status": "stale_or_already_started",
         }
 
-    return _generate_summary_for_stock(job_id, lease_token)
+    return _generate_summary_for_stock(self,job_id, lease_token)
 
 
 
