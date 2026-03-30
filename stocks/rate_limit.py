@@ -1,5 +1,4 @@
-import math
-import time
+import math,time
 from dataclasses import dataclass
 
 from django.conf import settings
@@ -114,8 +113,14 @@ class RedisTokenBucket:
     @property
     def redis_client(self):
         cache = caches[self.cache_name]
-        return cache.client.get_client(write=True)
+        backend = getattr(cache, "_cache", None)
 
+        if backend is None or not hasattr(backend, "get_client"):
+            raise RuntimeError(
+                f"Cache '{self.cache_name}' does not expose a Redis client"
+            )
+
+        return backend.get_client(write=True)
     def _load_script(self):
         self._sha = self.redis_client.script_load(LUA_TOKEN_BUCKET)
         return self._sha

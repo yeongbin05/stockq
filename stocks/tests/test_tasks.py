@@ -1,8 +1,8 @@
-import json
+import json,uuid
 from types import SimpleNamespace
 from unittest.mock import ANY, call, patch
 from uuid import uuid4
-
+from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -431,3 +431,98 @@ class DispatchSummaryJobsTests(TestCase):
 
         self.assertEqual(job.status, SummaryJob.Status.RUNNING)
         mock_delay.assert_called_once_with(job.id, ANY)
+
+
+class GenerateSummaryRateLimitTests(TestCase):
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
+    @patch("stocks.tasks.openai.chat.completions.create")
+    @patch("stocks.tasks.get_openai_bucket")
+    @patch("stocks.tasks.score_news_relevance")
+    def test_generate_summary_moves_job_to_retry_wait_when_bucket_denies(
+        self,
+        mock_score_news_relevance,
+        mock_get_openai_bucket,
+        mock_openai_create,
+    ):
+        stock = Stock.objects.create(symbol="AAPL", name="Apple")
+        news = News.objects.create(
+            headline="Apple beats estimates",
+            url="https://example.com/aapl-news",
+            source="Example",
+            published_at=timezone.now(),
+            language="en",
+            raw_json={},
+        )
+        news.stocks.add(stock)
+
+        lease_token = uuid.uuid4()
+        job = SummaryJob.objects.create(
+            stock=stock,
+            date=timezone.localdate(),
+            status=SummaryJob.Status.RUNNING,
+            lease_token=lease_token,
+            dispatched_at=timezone.now(),
+            started_at=None,
+        )
+
+        mock_score_news_relevance.return_value = (90, True, "relevant")
+        mock_bucket = mock_get_openai_bucket.return_value
+        mock_bucket.consume.return_value = SimpleNamespace(
+            allowed=False,
+            remaining_tokens=0,
+            retry_after_seconds=3,
+        )
+
+        result = generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        job.refresh_from_db()
+
+        self.assertEqual(result["status"], "rate_limited")
+        self.assertEqual(result["retry_after"], 3)
+
+        self.assertEqual(job.status, SummaryJob.Status.RETRY_WAIT)
+        self.assertIsNotNone(job.retry_at)
+        self.assertIsNone(job.started_at)
+        self.assertIsNone(job.dispatched_at)
+        self.assertIsNone(job.lease_token)
+        self.assertEqual(job.error_message, "rate limited by openai bucket")
+
+        mock_openai_create.assert_not_called()
+        self.assertFalse(
+            SummaryGenerationLog.objects.filter(
+                stock=stock,
+                date=job.date,
+                status="failed",
+            ).exists()
+        )
+
+
+class DispatchSummaryRetryWaitTests(TestCase):
+    @patch("stocks.tasks.generate_summary_for_stock.delay")
+    def test_dispatch_summary_jobs_requeues_retry_wait_job(self, mock_delay):
+        stock = Stock.objects.create(symbol="AAPL", name="Apple")
+        job = SummaryJob.objects.create(
+            stock=stock,
+            date=timezone.localdate(),
+            status=SummaryJob.Status.RETRY_WAIT,
+            retry_at=timezone.now() - timedelta(seconds=1),
+            lease_token=None,
+            started_at=None,
+            dispatched_at=None,
+        )
+
+        result = dispatch_summary_jobs()
+
+        job.refresh_from_db()
+
+        self.assertEqual(result["dispatched_count"], 1)
+        self.assertEqual(result["job_ids"], [job.id])
+
+        self.assertEqual(job.status, SummaryJob.Status.RUNNING)
+        self.assertIsNotNone(job.dispatched_at)
+        self.assertIsNone(job.started_at)
+        self.assertIsNone(job.retry_at)
+        self.assertIsNotNone(job.lease_token)
+        self.assertEqual(job.error_message, "")
+
+        mock_delay.assert_called_once_with(job.id, str(job.lease_token))
