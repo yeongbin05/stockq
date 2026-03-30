@@ -1,8 +1,8 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import call, patch
+from unittest.mock import ANY, call, patch
+from uuid import uuid4
 
-from celery.exceptions import MaxRetriesExceededError
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -21,6 +21,16 @@ from stocks.tasks import (
     generate_summary_for_stock,
 )
 
+
+def mark_job_as_dispatched(job):
+    lease_token = str(uuid4())
+    job.status = SummaryJob.Status.RUNNING
+    job.lease_token = lease_token
+    job.dispatched_at = timezone.now()
+    job.save(update_fields=["status", "lease_token", "dispatched_at"])
+    return lease_token
+
+
 class SummaryJobTestMixin:
     def create_job(
         self,
@@ -38,12 +48,14 @@ class SummaryJobTestMixin:
         )
         return stock, job
 
+
 class GenerateSummaryEmptyBranchTests(SummaryJobTestMixin, TestCase):
     @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
     def test_generate_summary_logs_no_news_when_no_news_exists(self):
         stock, job = self.create_job(symbol="AAPL", name="Apple")
 
-        result = generate_summary_for_stock.apply(args=(job.id,)).get()
+        lease_token = mark_job_as_dispatched(job)
+        result = generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
 
         self.assertIsNotNone(result)
         self.assertEqual(Summary.objects.filter(stock=stock).count(), 0)
@@ -81,7 +93,8 @@ class GenerateSummaryEmptyBranchTests(SummaryJobTestMixin, TestCase):
 
         mock_score_news_relevance.return_value = (1, False, "not relevant enough")
 
-        result = generate_summary_for_stock.apply(args=(job.id,)).get()
+        lease_token = mark_job_as_dispatched(job)
+        result = generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
 
         self.assertIsNotNone(result)
         self.assertEqual(Summary.objects.filter(stock=stock).count(), 0)
@@ -95,6 +108,7 @@ class GenerateSummaryEmptyBranchTests(SummaryJobTestMixin, TestCase):
         self.assertEqual(log.status, "no_relevant_news")
         self.assertEqual(log.raw_count, 1)
         self.assertEqual(log.relevant_count, 0)
+
 
 class GenerateSummaryIdempotencyTests(SummaryJobTestMixin, TestCase):
     @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
@@ -140,8 +154,11 @@ class GenerateSummaryIdempotencyTests(SummaryJobTestMixin, TestCase):
         )
         mock_openai_create.return_value = fake_response
 
-        generate_summary_for_stock.apply(args=(job.id,)).get()
-        generate_summary_for_stock.apply(args=(job.id,)).get()
+        lease_token = mark_job_as_dispatched(job)
+        generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        lease_token = mark_job_as_dispatched(job)
+        generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
 
         self.assertEqual(
             Summary.objects.filter(stock=stock, date=job.date).count(),
@@ -207,11 +224,12 @@ class FetchFavoriteNewsJobCreationTests(TestCase):
         self.assertCountEqual(result["success_symbols"], ["MSFT", "NVDA"])
         self.assertCountEqual(result["enqueued_symbols"], ["MSFT", "NVDA"])
 
-class GenerateSummaryRetryTests(SummaryJobTestMixin,TestCase):
+
+class GenerateSummaryFailureTests(SummaryJobTestMixin, TestCase):
     @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
     @patch("stocks.tasks.openai.chat.completions.create")
     @patch("stocks.tasks.score_news_relevance")
-    def test_generate_summary_retries_when_json_parse_fails(
+    def test_generate_summary_fails_and_logs_when_json_parse_fails(
         self,
         mock_score_news_relevance,
         mock_openai_create,
@@ -233,25 +251,32 @@ class GenerateSummaryRetryTests(SummaryJobTestMixin,TestCase):
             choices=[SimpleNamespace(message=SimpleNamespace(content="not-json"))]
         )
 
-        with self.assertRaises(MaxRetriesExceededError):
-            generate_summary_for_stock.apply(args=(job.id,)).get()
+        lease_token = mark_job_as_dispatched(job)
 
+        with self.assertRaises(Exception) as cm:
+            generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        self.assertIn("Expecting value", str(cm.exception))
         self.assertEqual(
-            SummaryGenerationLog.objects.filter(
-                stock=stock,
-                status="failed",
-                error_message__icontains="json_parse_failed",
-            ).count(),
-            4,
+            Summary.objects.filter(stock=stock, date=job.date).count(),
+            0,
         )
+
+        log = SummaryGenerationLog.objects.get(stock=stock, status="failed")
+        self.assertIn("json_parse_failed", log.error_message)
+        self.assertEqual(log.raw_count, 1)
+        self.assertEqual(log.relevant_count, 1)
 
         job.refresh_from_db()
         self.assertEqual(job.status, SummaryJob.Status.FAILED)
+        self.assertIsNotNone(job.started_at)
+        self.assertIsNotNone(job.finished_at)
+        self.assertIn("json_parse_failed", job.error_message)
 
     @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
     @patch("stocks.tasks.openai.chat.completions.create")
     @patch("stocks.tasks.score_news_relevance")
-    def test_generate_summary_retries_when_openai_call_fails(
+    def test_generate_summary_fails_and_logs_when_openai_call_fails(
         self,
         mock_score_news_relevance,
         mock_openai_create,
@@ -271,19 +296,28 @@ class GenerateSummaryRetryTests(SummaryJobTestMixin,TestCase):
         mock_score_news_relevance.return_value = (10, True, "matched")
         mock_openai_create.side_effect = Exception("openai temporary failure")
 
-        with self.assertRaises(MaxRetriesExceededError):
-            generate_summary_for_stock.apply(args=(job.id,)).get()
+        lease_token = mark_job_as_dispatched(job)
 
+        with self.assertRaises(Exception) as cm:
+            generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        self.assertIn("openai temporary failure", str(cm.exception))
         self.assertEqual(
-            SummaryGenerationLog.objects.filter(
-                stock=stock,
-                status="failed",
-            ).count(),
-            4,
+            Summary.objects.filter(stock=stock, date=job.date).count(),
+            0,
         )
+
+        log = SummaryGenerationLog.objects.get(stock=stock, status="failed")
+        self.assertIn("openai temporary failure", log.error_message)
+        self.assertEqual(log.raw_count, 1)
+        self.assertEqual(log.relevant_count, 1)
 
         job.refresh_from_db()
         self.assertEqual(job.status, SummaryJob.Status.FAILED)
+        self.assertIsNotNone(job.started_at)
+        self.assertIsNotNone(job.finished_at)
+        self.assertIn("openai temporary failure", job.error_message)
+
 
 class FetchFavoriteNewsDuplicateJobTests(TestCase):
     @patch("stocks.tasks.upsert_news_for_symbol")
@@ -316,7 +350,6 @@ class FetchFavoriteNewsDuplicateJobTests(TestCase):
             ).count(),
             1,
         )
-
 
 
 class DispatchSummaryJobsTests(TestCase):
@@ -359,13 +392,19 @@ class DispatchSummaryJobsTests(TestCase):
 
         self.assertEqual(pending_job_1.status, SummaryJob.Status.RUNNING)
         self.assertEqual(pending_job_2.status, SummaryJob.Status.RUNNING)
-        self.assertIsNotNone(pending_job_1.started_at)
-        self.assertIsNotNone(pending_job_2.started_at)
+
+        self.assertIsNotNone(pending_job_1.dispatched_at)
+        self.assertIsNotNone(pending_job_2.dispatched_at)
+        self.assertIsNotNone(pending_job_1.lease_token)
+        self.assertIsNotNone(pending_job_2.lease_token)
+
+        self.assertIsNone(pending_job_1.started_at)
+        self.assertIsNone(pending_job_2.started_at)
 
         self.assertEqual(already_running_job.status, SummaryJob.Status.RUNNING)
 
         mock_delay.assert_has_calls(
-            [call(pending_job_1.id), call(pending_job_2.id)],
+            [call(pending_job_1.id, ANY), call(pending_job_2.id, ANY)],
             any_order=True,
         )
         self.assertEqual(mock_delay.call_count, 2)
@@ -391,4 +430,4 @@ class DispatchSummaryJobsTests(TestCase):
         self.assertEqual(second_result["dispatched_count"], 0)
 
         self.assertEqual(job.status, SummaryJob.Status.RUNNING)
-        mock_delay.assert_called_once_with(job.id)
+        mock_delay.assert_called_once_with(job.id, ANY)
