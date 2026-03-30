@@ -10,6 +10,8 @@ from stocks.models import Stock, News,Summary,FavoriteStock,SummaryGenerationLog
 from time import perf_counter
 from stocks.utils import score_news_relevance
 from django.db import transaction
+from django.db.models import Q
+import uuid
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -330,16 +332,21 @@ def _generate_summary_for_stock(job_id: int):
     }
 
 @shared_task(bind=True, max_retries=3)
-def generate_summary_for_stock(self, job_id: int):
-    try:
-        return _generate_summary_for_stock(job_id)
-    except SummaryJob.DoesNotExist:
-        logger.error(f"[generate_summary] SummaryJob {job_id} not found")
-        return {"error": f"SummaryJob {job_id} not found"}
-    except Exception as e:
-        logger.error(f"[generate_summary] job_id={job_id} 요약 실패: {e}")
-        raise self.retry(exc=e, countdown=60)
-    
+def generate_summary_for_stock(self, job_id: int, lease_token: str):
+    started = SummaryJob.objects.filter(
+        id=job_id,
+        status=SummaryJob.Status.RUNNING,
+        lease_token=lease_token,
+        started_at__isnull=True,
+    ).update(started_at=timezone.now())
+
+    if started == 0:
+        return {
+            "job_id": job_id,
+            "status": "stale_or_already_started",
+        }
+
+    return _generate_summary_for_stock(job_id, lease_token)
 
 
 
@@ -371,27 +378,53 @@ def measure_pipeline_for_symbol(symbol: str, days: int = 1):
 
 @shared_task
 def dispatch_summary_jobs(limit: int = 20):
-    dispatched_job_ids = []
+    now = timezone.now()
+    dispatch_targets = []
 
     with transaction.atomic():
         jobs = list(
             SummaryJob.objects
             .select_for_update(skip_locked=True)
-            .filter(status=SummaryJob.Status.PENDING)
+            .filter(
+                Q(status=SummaryJob.Status.PENDING) |
+                Q(
+                    status=SummaryJob.Status.RETRY_WAIT,
+                    retry_at__lte=now,
+                )
+            )
             .order_by("created_at")[:limit]
         )
 
         for job in jobs:
-            job.status = SummaryJob.Status.RUNNING
-            job.started_at = timezone.now()
-            job.error_message = ""
-            job.save(update_fields=["status", "started_at", "error_message", "updated_at"])
-            dispatched_job_ids.append(job.id)
+            lease_token = uuid.uuid4()
 
-    for job_id in dispatched_job_ids:
-        generate_summary_for_stock.delay(job_id)
+            job.status = SummaryJob.Status.RUNNING
+            job.dispatched_at = now
+            job.started_at = None
+            job.finished_at = None
+            job.retry_at = None
+            job.lease_token = lease_token
+            job.error_message = ""
+
+            job.save(
+                update_fields=[
+                    "status",
+                    "dispatched_at",
+                    "started_at",
+                    "finished_at",
+                    "retry_at",
+                    "lease_token",
+                    "error_message",
+                    "updated_at",
+                ]
+            )
+
+            dispatch_targets.append((job.id, str(lease_token)))
+
+    for job_id, lease_token in dispatch_targets:
+        generate_summary_for_stock.delay(job_id, lease_token)
 
     return {
-        "dispatched_count": len(dispatched_job_ids),
-        "job_ids": dispatched_job_ids,
+        "dispatched_count": len(dispatch_targets),
+        "job_ids": [job_id for job_id, _ in dispatch_targets],
     }
