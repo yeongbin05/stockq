@@ -1,6 +1,5 @@
 import openai,json,logging,uuid
 from celery import shared_task
-from celery.exceptions import Retry
 from datetime import datetime, timedelta,time, timezone as dt_timezone
 from django.db import transaction
 from django.db.models import Q
@@ -414,8 +413,7 @@ def _generate_summary_for_stock(self,job_id: int,lease_token: str):
             max_tokens=1200,
             temperature=0.2
         )
-    except Retry:
-        raise
+
     except Exception as e:
         logger.error(f"OpenAI call failed: {e}")
         SummaryGenerationLog.objects.create(
