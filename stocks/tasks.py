@@ -16,6 +16,13 @@ import uuid
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+def _is_current_lease(job_id: int, lease_token: str) -> bool:
+    return SummaryJob.objects.filter(
+        id=job_id,
+        status=SummaryJob.Status.RUNNING,
+        lease_token=lease_token,
+    ).exists()
+
 def _get_utc_range_from_kst_date(target_date=None):
     kst = ZoneInfo("Asia/Seoul")
 
@@ -89,7 +96,7 @@ def estimate_token_count(text: str) -> int:
         return 0
     return max(1, len(text) // 4)
 
-def _generate_summary_for_stock(job_id: int):
+def _generate_summary_for_stock(job_id: int,lease_token: str):
     job = SummaryJob.objects.select_related("stock").get(id=job_id)
     stock = job.stock
     symbol = stock.symbol
@@ -97,10 +104,15 @@ def _generate_summary_for_stock(job_id: int):
    
     if not settings.OPENAI_API_KEY:
         logger.error("[generate_summary] OPENAI_API_KEY not set")
-        job.status = SummaryJob.Status.FAILED
-        job.finished_at = timezone.now()
-        job.error_message = "OpenAI API key not configured"
-        job.save(update_fields=["status", "finished_at", "error_message"])
+        SummaryJob.objects.filter(
+            id=job_id,
+            status=SummaryJob.Status.RUNNING,
+            lease_token=lease_token,
+        ).update(
+            status=SummaryJob.Status.FAILED,
+            finished_at=timezone.now(),
+            error_message="OpenAI API key not configured",
+        )
         return {"error": "OpenAI API key not configured", "job_id": job_id}
 
     openai.api_key = settings.OPENAI_API_KEY
@@ -128,9 +140,14 @@ def _generate_summary_for_stock(job_id: int):
             elapsed_ms=0,
         )
 
-        job.status = SummaryJob.Status.NO_NEWS
-        job.finished_at = timezone.now()
-        job.save(update_fields=["status", "finished_at"])
+        SummaryJob.objects.filter(
+            id=job_id,
+            status=SummaryJob.Status.RUNNING,
+            lease_token=lease_token,
+        ).update(
+            status=SummaryJob.Status.NO_NEWS,
+            finished_at=timezone.now(),
+        )
         return {"message": "No news found", "job_id": job_id}
 
     scored_news = []
@@ -238,14 +255,24 @@ def _generate_summary_for_stock(job_id: int):
             status="no_relevant_news",
             elapsed_ms=0,
         )
-        job.status = SummaryJob.Status.NO_RELEVANT_NEWS
-        job.finished_at = timezone.now()
-        job.save(update_fields=["status", "finished_at"])
+        SummaryJob.objects.filter(
+            id=job_id,
+            status=SummaryJob.Status.RUNNING,
+            lease_token=lease_token,
+        ).update(
+            status=SummaryJob.Status.NO_RELEVANT_NEWS,
+            finished_at=timezone.now(),
+        )
 
         logger.info(f"[generate_summary] {symbol}: 관련 뉴스가 없어 요약 생략")
         return {"message": "No relevant news found", "job_id": job_id}
     
     t0 = perf_counter()
+    if not _is_current_lease(job_id, lease_token):
+        return {
+            "job_id": job_id,
+            "status": "stale_before_llm",
+        }
     try:
         response = openai.chat.completions.create(
             model=settings.OPENAI_MODEL,
@@ -269,10 +296,15 @@ def _generate_summary_for_stock(job_id: int):
             elapsed_ms=int((perf_counter() - t0) * 1000),
             error_message=str(e),
         )
-        job.status = SummaryJob.Status.FAILED
-        job.finished_at = timezone.now()
-        job.error_message = str(e)
-        job.save(update_fields=["status", "finished_at", "error_message"])
+        SummaryJob.objects.filter(
+            id=job_id,
+            status=SummaryJob.Status.RUNNING,
+            lease_token=lease_token,
+        ).update(
+            status=SummaryJob.Status.FAILED,
+            finished_at=timezone.now(),
+            error_message=str(e),
+        )
         raise
 
     summary_text = response.choices[0].message.content
@@ -291,11 +323,23 @@ def _generate_summary_for_stock(job_id: int):
             elapsed_ms=int((perf_counter() - t0) * 1000),
             error_message=f"json_parse_failed: {str(e)}",
         )
-        job.status = SummaryJob.Status.FAILED
-        job.finished_at = timezone.now()
-        job.error_message = f"json_parse_failed: {str(e)}"
-        job.save(update_fields=["status", "finished_at", "error_message"])
+        SummaryJob.objects.filter(
+            id=job_id,
+            status=SummaryJob.Status.RUNNING,
+            lease_token=lease_token,
+        ).update(
+            status=SummaryJob.Status.FAILED,
+            finished_at=timezone.now(),
+            error_message=f"json_parse_failed: {str(e)}",
+        )
         raise
+    
+    if not _is_current_lease(job_id, lease_token):
+        return {
+            "job_id": job_id,
+            "status": "stale_after_llm",
+        }
+
 
     Summary.objects.update_or_create(
         stock=stock,
@@ -319,9 +363,14 @@ def _generate_summary_for_stock(job_id: int):
     logger.info(
         f"[generate_summary] symbol={symbol} llm_and_save_elapsed={t1 - t0:.2f}s"
     )
-    job.status = SummaryJob.Status.SUCCESS
-    job.finished_at = timezone.now()
-    job.save(update_fields=["status", "finished_at"])
+    SummaryJob.objects.filter(
+        id=job_id,
+        status=SummaryJob.Status.RUNNING,
+        lease_token=lease_token,
+    ).update(
+        status=SummaryJob.Status.SUCCESS,
+        finished_at=timezone.now(),
+    )
     return {
         "job_id": job_id,
         "symbol": symbol,
