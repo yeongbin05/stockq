@@ -1,8 +1,9 @@
-import math,time
+import math
+import time
 from dataclasses import dataclass
 
+import redis
 from django.conf import settings
-from django.core.cache import caches
 from redis.exceptions import NoScriptError
 
 
@@ -103,29 +104,34 @@ class BucketResult:
 
 
 class RedisTokenBucket:
-    def __init__(self, key: str, capacity: int, refill_rate_per_sec: float, cache_name: str = "default"):
+    def __init__(
+        self,
+        key: str,
+        capacity: int,
+        refill_rate_per_sec: float,
+        redis_url: str,
+    ):
         self.key = key
         self.capacity = capacity
         self.refill_rate_per_sec = refill_rate_per_sec
-        self.cache_name = cache_name
+        self.redis_url = redis_url
         self._sha = None
+        self._client = None
 
     @property
     def redis_client(self):
-        cache = caches[self.cache_name]
-        backend = getattr(cache, "_cache", None)
+        if self._client is None:
+            self._client = redis.Redis.from_url(self.redis_url)
+        return self._client
 
-        if backend is None or not hasattr(backend, "get_client"):
-            raise RuntimeError(
-                f"Cache '{self.cache_name}' does not expose a Redis client"
-            )
-
-        return backend.get_client(write=True)
     def _load_script(self):
         self._sha = self.redis_client.script_load(LUA_TOKEN_BUCKET)
         return self._sha
 
     def consume(self, tokens: int = 1) -> BucketResult:
+        if tokens <= 0:
+            raise ValueError("tokens must be greater than 0")
+
         now_us = time.time_ns() // 1000
         client = self.redis_client
 
@@ -155,19 +161,31 @@ class RedisTokenBucket:
             )
 
         allowed, remaining_tokens, retry_after_us = result
-        retry_after_seconds = max(1, math.ceil(int(retry_after_us) / 1_000_000)) if not allowed else 0
+        allowed = bool(int(allowed))
+        remaining_tokens = int(remaining_tokens)
+        retry_after_us = int(retry_after_us)
+
+        retry_after_seconds = (
+            0 if allowed else max(1, math.ceil(retry_after_us / 1_000_000))
+        )
 
         return BucketResult(
-            allowed=bool(allowed),
-            remaining_tokens=int(remaining_tokens),
+            allowed=allowed,
+            remaining_tokens=remaining_tokens,
             retry_after_seconds=retry_after_seconds,
         )
 
 
 def get_openai_bucket() -> RedisTokenBucket:
+    redis_url = (
+        getattr(settings, "OPENAI_BUCKET_REDIS_URL", None)
+        or getattr(settings, "REDIS_URL", None)
+        or "redis://redis:6379/3"
+    )
+
     return RedisTokenBucket(
         key=getattr(settings, "OPENAI_BUCKET_KEY", "rate_limit:openai"),
-        capacity=getattr(settings, "OPENAI_BUCKET_CAPACITY", 3),
-        refill_rate_per_sec=getattr(settings, "OPENAI_BUCKET_REFILL_RATE", 1),
-        cache_name=getattr(settings, "OPENAI_BUCKET_CACHE", "default"),
+        capacity=int(getattr(settings, "OPENAI_BUCKET_CAPACITY", 3)),
+        refill_rate_per_sec=float(getattr(settings, "OPENAI_BUCKET_REFILL_RATE", 1)),
+        redis_url=redis_url,
     )
