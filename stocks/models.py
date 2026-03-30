@@ -195,9 +195,11 @@ class SummaryJob(models.Model):
     retry_count = models.PositiveIntegerField(default=0)
     error_message = models.TextField(blank=True, default="")
 
+    dispatched_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
-
+    retry_at = models.DateTimeField(null=True, blank=True)
+    lease_token = models.UUIDField(null=True, blank=True, db_index=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -210,7 +212,9 @@ class SummaryJob(models.Model):
         ]
         indexes = [
             models.Index(fields=["status", "date"]),
-            models.Index(fields=["stock", "date"]),
+            models.Index(fields=["status", "retry_at"]),
+            models.Index(fields=["status", "dispatched_at"]),
+            models.Index(fields=["status", "started_at"]),
         ]
 
     def __str__(self) -> str:
