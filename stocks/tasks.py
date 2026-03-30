@@ -240,6 +240,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         ).update(
             status=SummaryJob.Status.NO_NEWS,
             finished_at=timezone.now(),
+            error_message="",
         )
         return {"message": "No news found", "job_id": job_id}
 
@@ -355,6 +356,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         ).update(
             status=SummaryJob.Status.NO_RELEVANT_NEWS,
             finished_at=timezone.now(),
+            error_message="",
         )
 
         logger.info(f"[generate_summary] {symbol}: 관련 뉴스가 없어 요약 생략")
@@ -463,6 +465,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
     ).update(
         status=SummaryJob.Status.SUCCESS,
         finished_at=timezone.now(),
+        error_message="",
     )
     return {
         "job_id": job_id,
