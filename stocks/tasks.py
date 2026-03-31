@@ -12,6 +12,7 @@ from stocks.utils import score_news_relevance
 from stocks.rate_limit import get_openai_bucket
 from time import perf_counter
 from zoneinfo import ZoneInfo
+from stocks.rate_limit import get_openai_bucket, get_finnhub_bucket
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -147,6 +148,22 @@ def fetch_favorite_news(self, days: int = 1):
 
     for symbol in symbols:
         try:
+            if settings.FINNHUB_BUCKET_ENABLED:
+                bucket = get_finnhub_bucket()
+                bucket_result = bucket.consume(tokens=1)
+
+                if not bucket_result.allowed:
+                    results.append({
+                        "symbol": symbol,
+                        "status": "rate_limited",
+                        "retry_after": bucket_result.retry_after_seconds,
+                        "error": f"Rate limit wait timeout: {symbol}",
+                    })
+                    failed_symbols.append({
+                        "symbol": symbol,
+                        "error": f"Rate limit wait timeout: {symbol}",
+                    })
+                    continue
             res = upsert_news_for_symbol(symbol, days=days)
             results.append({"symbol": symbol, **res})
             
