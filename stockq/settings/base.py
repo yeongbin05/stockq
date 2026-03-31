@@ -217,3 +217,5 @@ OPENAI_BUCKET_REDIS_URL = env(
     "OPENAI_BUCKET_REDIS_URL",
     default="redis://redis:6379/3",
 )
+
+OPENAI_BUCKET_ENABLED = env.bool("OPENAI_BUCKET_ENABLED", default=True)

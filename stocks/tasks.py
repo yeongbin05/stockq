@@ -370,38 +370,39 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             "status": "stale_before_llm",
         }
     try:
-        bucket = get_openai_bucket()
-        bucket_result = bucket.consume(tokens=1)
+        if settings.OPENAI_BUCKET_ENABLED:
+            bucket = get_openai_bucket()
+            bucket_result = bucket.consume(tokens=1)
 
-        if not bucket_result.allowed:
-            retry_at = timezone.now() + timedelta(seconds=bucket_result.retry_after_seconds)
+            if not bucket_result.allowed:
+                retry_at = timezone.now() + timedelta(seconds=bucket_result.retry_after_seconds)
 
-            logger.warning(
-                "[generate_summary] OpenAI bucket exceeded for %s. retry_after=%ss remaining=%s",
-                stock.symbol,
-                bucket_result.retry_after_seconds,
-                bucket_result.remaining_tokens,
-            )
+                logger.warning(
+                    "[generate_summary] OpenAI bucket exceeded for %s. retry_after=%ss remaining=%s",
+                    stock.symbol,
+                    bucket_result.retry_after_seconds,
+                    bucket_result.remaining_tokens,
+                )
 
-            SummaryJob.objects.filter(
-                id=job_id,
-                status=SummaryJob.Status.RUNNING,
-                lease_token=lease_token,
-            ).update(
-                status=SummaryJob.Status.RETRY_WAIT,
-                retry_at=retry_at,
-                started_at=None,
-                finished_at=None,
-                dispatched_at=None,
-                lease_token=None,
-                error_message="rate limited by openai bucket",
-            )
+                SummaryJob.objects.filter(
+                    id=job_id,
+                    status=SummaryJob.Status.RUNNING,
+                    lease_token=lease_token,
+                ).update(
+                    status=SummaryJob.Status.RETRY_WAIT,
+                    retry_at=retry_at,
+                    started_at=None,
+                    finished_at=None,
+                    dispatched_at=None,
+                    lease_token=None,
+                    error_message="rate limited by openai bucket",
+                )
 
-            return {
-                "job_id": job_id,
-                "status": "rate_limited",
-                "retry_after": bucket_result.retry_after_seconds,
-            }
+                return {
+                    "job_id": job_id,
+                    "status": "rate_limited",
+                    "retry_after": bucket_result.retry_after_seconds,
+                }
         response = openai.chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=[
