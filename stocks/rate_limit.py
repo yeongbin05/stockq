@@ -200,7 +200,7 @@ def get_finnhub_bucket() -> RedisTokenBucket:
 
     return RedisTokenBucket(
         key=getattr(settings, "FINNHUB_BUCKET_KEY", "rate_limit:finnhub"),
-        capacity=int(getattr(settings, "FINNHUB_BUCKET_CAPACITY", 60)),
-        refill_rate_per_sec=float(getattr(settings, "FINNHUB_BUCKET_REFILL_RATE", 1.0)),
+        capacity=int(getattr(settings, "FINNHUB_BUCKET_CAPACITY", 3)),
+        refill_rate_per_sec=float(getattr(settings, "FINNHUB_BUCKET_REFILL_RATE", 1)),
         redis_url=redis_url,
     )
