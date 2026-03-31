@@ -16,9 +16,13 @@ from stocks.models import (
     SummaryJob,
 )
 from stocks.tasks import (
+    QUEUE_START_TIMEOUT,
+    RUNNING_EXEC_TIMEOUT,
+    MAX_STUCK_RECOVERY_RETRIES,
     dispatch_summary_jobs,
     fetch_favorite_news,
     generate_summary_for_stock,
+    recover_stuck_summary_jobs,
 )
 
 
@@ -526,3 +530,195 @@ class DispatchSummaryRetryWaitTests(TestCase):
         self.assertEqual(job.error_message, "")
 
         mock_delay.assert_called_once_with(job.id, str(job.lease_token))
+
+
+
+class DispatchSummaryRetryWaitNotReadyTests(TestCase):
+    @patch("stocks.tasks.generate_summary_for_stock.delay")
+    def test_dispatch_summary_jobs_does_not_requeue_retry_wait_job_before_retry_at(
+        self,
+        mock_delay,
+    ):
+        stock = Stock.objects.create(symbol="AAPL", name="Apple")
+        job = SummaryJob.objects.create(
+            stock=stock,
+            date=timezone.localdate(),
+            status=SummaryJob.Status.RETRY_WAIT,
+            retry_at=timezone.now() + timedelta(minutes=1),
+            lease_token=None,
+            started_at=None,
+            dispatched_at=None,
+        )
+
+        result = dispatch_summary_jobs()
+
+        job.refresh_from_db()
+
+        self.assertEqual(result["dispatched_count"], 0)
+        self.assertEqual(result["job_ids"], [])
+
+        self.assertEqual(job.status, SummaryJob.Status.RETRY_WAIT)
+        self.assertIsNone(job.dispatched_at)
+        self.assertIsNone(job.started_at)
+        self.assertIsNotNone(job.retry_at)
+        mock_delay.assert_not_called()
+
+
+class RecoverStuckSummaryJobsTests(TestCase):
+    def test_recover_stuck_summary_jobs_moves_stuck_running_job_to_retry_wait(self):
+        stock = Stock.objects.create(symbol="AAPL", name="Apple")
+        lease_token = str(uuid4())
+
+        job = SummaryJob.objects.create(
+            stock=stock,
+            date=timezone.localdate(),
+            status=SummaryJob.Status.RUNNING,
+            lease_token=lease_token,
+            retry_count=0,
+            dispatched_at=timezone.now() - QUEUE_START_TIMEOUT - timedelta(seconds=1),
+            started_at=None,
+            finished_at=None,
+        )
+
+        result = recover_stuck_summary_jobs()
+
+        job.refresh_from_db()
+
+        self.assertEqual(result["recovered_job_ids"], [job.id])
+        self.assertEqual(result["failed_job_ids"], [])
+
+        self.assertEqual(job.status, SummaryJob.Status.RETRY_WAIT)
+        self.assertEqual(job.retry_count, 1)
+        self.assertIsNotNone(job.retry_at)
+        self.assertIsNone(job.dispatched_at)
+        self.assertIsNone(job.started_at)
+        self.assertIsNone(job.lease_token)
+        self.assertEqual(job.error_message, "stuck timeout recovery")
+
+    def test_recover_stuck_summary_jobs_marks_job_failed_when_max_retries_exceeded(self):
+        stock = Stock.objects.create(symbol="AAPL", name="Apple")
+        lease_token = str(uuid4())
+
+        job = SummaryJob.objects.create(
+            stock=stock,
+            date=timezone.localdate(),
+            status=SummaryJob.Status.RUNNING,
+            lease_token=lease_token,
+            retry_count=MAX_STUCK_RECOVERY_RETRIES,
+            started_at=timezone.now() - RUNNING_EXEC_TIMEOUT - timedelta(seconds=1),
+            finished_at=None,
+        )
+
+        result = recover_stuck_summary_jobs()
+
+        job.refresh_from_db()
+
+        self.assertEqual(result["recovered_job_ids"], [])
+        self.assertEqual(result["failed_job_ids"], [job.id])
+
+        self.assertEqual(job.status, SummaryJob.Status.FAILED)
+        self.assertIsNotNone(job.finished_at)
+        self.assertEqual(job.error_message, "stuck timeout exceeded max retries")
+
+
+class GenerateSummaryLeaseStateTests(SummaryJobTestMixin, TestCase):
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
+    @patch("stocks.tasks.openai.chat.completions.create")
+    @patch("stocks.tasks.score_news_relevance")
+    @patch("stocks.tasks._is_current_lease")
+    def test_generate_summary_returns_stale_before_llm(
+        self,
+        mock_is_current_lease,
+        mock_score_news_relevance,
+        mock_openai_create,
+    ):
+        stock, job = self.create_job(symbol="AAPL", name="Apple")
+
+        news = News.objects.create(
+            headline="Apple beats estimates",
+            url="https://example.com/aapl-news",
+            source="Example",
+            published_at=timezone.now(),
+            language="en",
+            raw_json={},
+        )
+        news.stocks.add(stock)
+
+        mock_score_news_relevance.return_value = (10, True, "matched")
+        mock_is_current_lease.return_value = False
+
+        lease_token = mark_job_as_dispatched(job)
+        result = generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        job.refresh_from_db()
+
+        self.assertEqual(result["status"], "stale_before_llm")
+        self.assertEqual(Summary.objects.filter(stock=stock, date=job.date).count(), 0)
+        mock_openai_create.assert_not_called()
+        self.assertEqual(job.status, SummaryJob.Status.RUNNING)
+        self.assertIsNotNone(job.started_at)
+        self.assertIsNone(job.finished_at)
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
+    @patch("stocks.tasks.get_openai_bucket")
+    @patch("stocks.tasks.openai.chat.completions.create")
+    @patch("stocks.tasks.score_news_relevance")
+    @patch("stocks.tasks._is_current_lease")
+    def test_generate_summary_returns_stale_after_llm(
+        self,
+        mock_is_current_lease,
+        mock_score_news_relevance,
+        mock_openai_create,
+        mock_get_openai_bucket,
+    ):
+        stock, job = self.create_job(symbol="AAPL", name="Apple")
+
+        news = News.objects.create(
+            headline="Apple beats estimates",
+            url="https://example.com/aapl-news",
+            source="Example",
+            published_at=timezone.now(),
+            language="en",
+            raw_json={},
+        )
+        news.stocks.add(stock)
+
+        mock_score_news_relevance.return_value = (10, True, "matched")
+        mock_is_current_lease.side_effect = [True, False]
+
+        mock_bucket = mock_get_openai_bucket.return_value
+        mock_bucket.consume.return_value = SimpleNamespace(
+            allowed=True,
+            remaining_tokens=0,
+            retry_after_seconds=0,
+        )
+
+        response_payload = {
+            "ticker": "AAPL",
+            "date": str(job.date),
+            "news_summary": ["Apple beat earnings expectations."],
+            "price_and_volume": "Stock moved on earnings sentiment.",
+            "overall_sentiment": {
+                "sentiment": "긍정",
+                "rationale": "Strong earnings and positive guidance.",
+                "confidence": 87,
+            },
+        }
+        mock_openai_create.return_value = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=json.dumps(response_payload))
+                )
+            ]
+        )
+
+        lease_token = mark_job_as_dispatched(job)
+        result = generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        job.refresh_from_db()
+
+        self.assertEqual(result["status"], "stale_after_llm")
+        self.assertEqual(Summary.objects.filter(stock=stock, date=job.date).count(), 0)
+        self.assertEqual(job.status, SummaryJob.Status.RUNNING)
+        self.assertIsNotNone(job.started_at)
+        self.assertIsNone(job.finished_at)

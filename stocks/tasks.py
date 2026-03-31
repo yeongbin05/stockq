@@ -15,10 +15,6 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-def acquire_openai_token():
-    bucket = get_openai_bucket()
-    return bucket.consume(tokens=1)
-
 def _is_current_lease(job_id: int, lease_token: str) -> bool:
     return SummaryJob.objects.filter(
         id=job_id,
@@ -192,7 +188,7 @@ def estimate_token_count(text: str) -> int:
         return 0
     return max(1, len(text) // 4)
 
-def _generate_summary_for_stock(self,job_id: int,lease_token: str):
+def _generate_summary_for_stock(job_id: int,lease_token: str):
     job = SummaryJob.objects.select_related("stock").get(id=job_id)
     stock = job.stock
     symbol = stock.symbol
@@ -216,13 +212,15 @@ def _generate_summary_for_stock(self,job_id: int,lease_token: str):
 
     target_date, start_utc, end_utc = _get_utc_range_from_kst_date(target_date)
 
-    news_query = News.objects.filter(
-        stocks__symbol__iexact=symbol,
-        published_at__gte=start_utc,
-        published_at__lt=end_utc,
-    ).order_by("-published_at")[:10]
+    news_items = list(
+        News.objects.filter(
+            stocks__symbol__iexact=symbol,
+            published_at__gte=start_utc,
+            published_at__lt=end_utc,
+        ).order_by("-published_at")[:10]
+    )
 
-    raw_count = news_query.count()
+    raw_count = len(news_items)
 
     if raw_count == 0:
         SummaryGenerationLog.objects.create(
@@ -248,7 +246,7 @@ def _generate_summary_for_stock(self,job_id: int,lease_token: str):
         return {"message": "No news found", "job_id": job_id}
 
     scored_news = []
-    for news in news_query:
+    for news in news_items:
         score, is_relevant, reason = score_news_relevance(
             symbol=symbol,
             company_name=stock.name,
@@ -273,7 +271,7 @@ def _generate_summary_for_stock(self,job_id: int,lease_token: str):
     kst = timezone.get_fixed_timezone(9 * 60)
 
     all_news_texts = []
-    for news in news_query:
+    for news in news_items:
         published_kst = news.published_at.astimezone(kst).strftime("%Y-%m-%d %H:%M")
         all_news_texts.append(
             f"제목: {news.headline}\n"
@@ -512,7 +510,7 @@ def _generate_summary_for_stock(self,job_id: int,lease_token: str):
         "relevant_count": relevant_count,
     }
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True)
 def generate_summary_for_stock(self, job_id: int, lease_token: str):
     started = SummaryJob.objects.filter(
         id=job_id,
@@ -527,35 +525,7 @@ def generate_summary_for_stock(self, job_id: int, lease_token: str):
             "status": "stale_or_already_started",
         }
 
-    return _generate_summary_for_stock(self,job_id, lease_token)
-
-
-
-def measure_pipeline_for_symbol(symbol: str, days: int = 1):
-    t0 = perf_counter()
-
-    fetch_result = upsert_news_for_symbol(symbol, days=days)
-    t1 = perf_counter()
-
-    kst = ZoneInfo("Asia/Seoul")
-    target_date = timezone.now().astimezone(kst).date() - timedelta(days=days - 1)
-
-    t2 = perf_counter()
-
-    result = {
-        "symbol": symbol,
-        "target_date": str(target_date),
-        "fetch_elapsed": round(t1 - t0, 2),
-        "summary_elapsed": round(t2 - t1, 2),
-        "total_elapsed": round(t2 - t0, 2),
-        "fetch_result": fetch_result,
-       
-    }
-
-    logger.info(f"[measure_pipeline] {result}")
-    return result
-
-
+    return _generate_summary_for_stock(job_id, lease_token)
 
 @shared_task
 def dispatch_summary_jobs(limit: int = 20):
