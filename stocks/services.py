@@ -120,26 +120,57 @@ def fetch_company_news(symbol: str, days: int = 1, max_retries: int = 5):
 
     raise Exception(f"Finnhub fetch failed after retries: {symbol}")
 
+from time import perf_counter
+import logging
+
+logger = logging.getLogger(__name__)
+
 @transaction.atomic
 def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
     """
     Finnhub에서 symbol 뉴스 가져와 stocks.News/NewsStock에 업서트.
     반환: {"created_news": X, "linked_pairs": Y, "skipped": Z}
     """
+    t_total_start = perf_counter()
+
+    t_wait_start = perf_counter()
     if not wait_for_slot("rate_limit:finnhub", capacity=5, rate=1):
+        t_wait_end = perf_counter()
+        logger.info(
+            "[upsert_news_for_symbol_breakdown] symbol=%s wait_slot=%.3fs fetch=0.000s stock_get=0.000s news_upsert=0.000s link_upsert=0.000s total=%.3fs status=rate_limited",
+            symbol,
+            t_wait_end - t_wait_start,
+            t_wait_end - t_total_start,
+        )
         raise Exception(f"Rate limit wait timeout: {symbol}")
+    t_wait_end = perf_counter()
+
+    t_fetch_start = perf_counter()
     data = fetch_company_news(symbol, days)
+    t_fetch_end = perf_counter()
+
     created_news = 0
     linked_pairs = 0
     skipped = 0
 
-    # 심볼에 해당하는 Stock이 있어야 링크 가능
+    t_stock_start = perf_counter()
     try:
         stock = Stock.objects.get(symbol=symbol)
     except Stock.DoesNotExist:
-        # 필요시 자동 생성하려면 아래 주석 해제
-        # stock = Stock.objects.create(symbol=symbol, name=symbol, exchange="", currency="USD")
+        t_stock_end = perf_counter()
+        logger.info(
+            "[upsert_news_for_symbol_breakdown] symbol=%s wait_slot=%.3fs fetch=%.3fs stock_get=%.3fs news_upsert=0.000s link_upsert=0.000s total=%.3fs status=stock_not_found",
+            symbol,
+            t_wait_end - t_wait_start,
+            t_fetch_end - t_fetch_start,
+            t_stock_end - t_stock_start,
+            t_stock_end - t_total_start,
+        )
         raise
+    t_stock_end = perf_counter()
+
+    news_upsert_elapsed = 0.0
+    link_upsert_elapsed = 0.0
 
     for item in data:
         raw_url = item.get("url") or ""
@@ -150,7 +181,6 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
         canonical = normalize_url(raw_url)
         url_hash = make_url_hash(raw_url)
 
-        # published_at: finnhub "datetime"는 epoch(sec)
         ts = item.get("datetime")
         try:
             published_at = datetime.fromtimestamp(int(ts), tz=UTC) if ts else datetime.now(UTC)
@@ -164,26 +194,43 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
             "source": item.get("source") or (urlparse(canonical).netloc if canonical else None),
             "published_at": published_at,
             "language": item.get("lang", "en"),
-            "raw_json": item,  # 원본 보관
+            "raw_json": item,
         }
 
+        t_news_upsert_start = perf_counter()
         news, created = News.objects.get_or_create(url_hash=url_hash, defaults=defaults)
+        t_news_upsert_end = perf_counter()
+        news_upsert_elapsed += (t_news_upsert_end - t_news_upsert_start)
+
         if created:
             created_news += 1
-        else:
-            # 필요 시 업데이트(헤드라인 변경 등)
-            # news.headline = defaults["headline"] or news.headline
-            # news.save(update_fields=["headline"])
-            pass
 
-        # through 테이블 링크
+        t_link_upsert_start = perf_counter()
         ns_created = NewsStock.objects.get_or_create(news=news, stock=stock)[1]
+        t_link_upsert_end = perf_counter()
+        link_upsert_elapsed += (t_link_upsert_end - t_link_upsert_start)
+
         if ns_created:
             linked_pairs += 1
 
-    return {"created_news": created_news, "linked_pairs": linked_pairs, "skipped": skipped}
-    
+    t_total_end = perf_counter()
 
+    logger.info(
+        "[upsert_news_for_symbol_breakdown] symbol=%s wait_slot=%.3fs fetch=%.3fs stock_get=%.3fs news_upsert=%.3fs link_upsert=%.3fs total=%.3fs item_count=%s created_news=%s linked_pairs=%s skipped=%s",
+        symbol,
+        t_wait_end - t_wait_start,
+        t_fetch_end - t_fetch_start,
+        t_stock_end - t_stock_start,
+        news_upsert_elapsed,
+        link_upsert_elapsed,
+        t_total_end - t_total_start,
+        len(data),
+        created_news,
+        linked_pairs,
+        skipped,
+    )
+
+    return {"created_news": created_news, "linked_pairs": linked_pairs, "skipped": skipped}
 
 
 def store_daily_summaries_for_user(user, summaries_by_symbol: dict):

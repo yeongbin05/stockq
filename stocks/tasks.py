@@ -130,6 +130,8 @@ def recover_stuck_summary_jobs():
     }
 
 
+from time import perf_counter
+
 @shared_task(bind=True)
 def fetch_favorite_news(self, days: int = 1):
     symbols = (
@@ -148,11 +150,22 @@ def fetch_favorite_news(self, days: int = 1):
 
     for symbol in symbols:
         try:
+            t_symbol_start = perf_counter()
+
+            t_bucket_start = perf_counter()
             if settings.FINNHUB_BUCKET_ENABLED:
                 bucket = get_finnhub_bucket()
                 bucket_result = bucket.consume(tokens=1)
 
                 if not bucket_result.allowed:
+                    t_bucket_end = perf_counter()
+                    logger.info(
+                        "[fetch_favorite_news_breakdown] symbol=%s bucket=%.3fs upsert=0.000s enqueue=0.000s total=%.3fs status=rate_limited retry_after=%s",
+                        symbol,
+                        t_bucket_end - t_bucket_start,
+                        t_bucket_end - t_symbol_start,
+                        bucket_result.retry_after_seconds,
+                    )
                     results.append({
                         "symbol": symbol,
                         "status": "rate_limited",
@@ -164,9 +177,15 @@ def fetch_favorite_news(self, days: int = 1):
                         "error": f"Rate limit wait timeout: {symbol}",
                     })
                     continue
+            t_bucket_end = perf_counter()
+
+            t_upsert_start = perf_counter()
             res = upsert_news_for_symbol(symbol, days=days)
+            t_upsert_end = perf_counter()
+
+            t_enqueue_start = perf_counter()
             results.append({"symbol": symbol, **res})
-            
+
             has_new_input = (
                 res.get("created_news", 0) > 0 or
                 res.get("linked_pairs", 0) > 0
@@ -177,6 +196,7 @@ def fetch_favorite_news(self, days: int = 1):
                 date=today,
             ).exists()
 
+            created = False
             if has_new_input and not summary_exists_today:
                 stock = Stock.objects.get(symbol__iexact=symbol)
                 _, created = SummaryJob.objects.get_or_create(
@@ -186,10 +206,24 @@ def fetch_favorite_news(self, days: int = 1):
                 )
                 if created:
                     enqueued_symbols.append(symbol)
+            t_enqueue_end = perf_counter()
+
+            logger.info(
+                "[fetch_favorite_news_breakdown] symbol=%s bucket=%.3fs upsert=%.3fs enqueue=%.3fs total=%.3fs created_news=%s linked_pairs=%s enqueued=%s",
+                symbol,
+                t_bucket_end - t_bucket_start,
+                t_upsert_end - t_upsert_start,
+                t_enqueue_end - t_enqueue_start,
+                t_enqueue_end - t_symbol_start,
+                res.get("created_news", 0),
+                res.get("linked_pairs", 0),
+                created,
+            )
 
             success_symbols.append(symbol)
 
         except Exception as e:
+            logger.exception("[fetch_favorite_news] symbol=%s failed: %s", symbol, e)
             results.append({"symbol": symbol, "error": str(e)})
             failed_symbols.append({"symbol": symbol, "error": str(e)})
 
