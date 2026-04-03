@@ -77,7 +77,7 @@ def allow_request(bucket: str, capacity: int, rate: int) -> bool:
             str(now_us),
         )
 
-    return result == 1
+    return bool(result) and int(result[0]) == 1
 
 def wait_for_slot(bucket: str, capacity: int, rate: int, timeout: float = 15.0, interval: float = 0.2) -> bool:
     start = time.time()
