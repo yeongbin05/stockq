@@ -229,6 +229,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
 
     target_date, start_utc, end_utc = _get_utc_range_from_kst_date(target_date)
 
+    t_news_query_start = perf_counter()
     news_items = list(
         News.objects.filter(
             stocks__symbol__iexact=symbol,
@@ -236,6 +237,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             published_at__lt=end_utc,
         ).order_by("-published_at")[:10]
     )
+    t_news_query_end = perf_counter()
 
     raw_count = len(news_items)
 
@@ -262,6 +264,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         )
         return {"message": "No news found", "job_id": job_id}
 
+    t_relevance_start = perf_counter()
     scored_news = []
     for news in news_items:
         score, is_relevant, reason = score_news_relevance(
@@ -278,13 +281,13 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
 
     relevant_news = [item for item in scored_news if item["is_relevant"]]
     relevant_count = len(relevant_news)
-
+    t_relevance_end = perf_counter()
     logger.info(
         f"[generate_summary] symbol={symbol} raw_count={raw_count} relevant_count={relevant_count}"
     )
 
     
-
+    t_prompt_start = perf_counter()
     kst = timezone.get_fixed_timezone(9 * 60)
 
     all_news_texts = []
@@ -355,6 +358,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
     
     before_input_tokens = estimate_token_count(system_prompt + "\n" + before_user_prompt)
     after_input_tokens = estimate_token_count(system_prompt + "\n" + user_prompt)
+    t_prompt_end = perf_counter()
 
     if relevant_count == 0:
         SummaryGenerationLog.objects.create(
@@ -420,6 +424,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
                     "status": "rate_limited",
                     "retry_after": bucket_result.retry_after_seconds,
                 }
+        t_llm_start = perf_counter()
         response = openai.chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=[
@@ -429,7 +434,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             max_tokens=1200,
             temperature=0.2
         )
-
+        t_llm_end = perf_counter()
     except Exception as e:
         logger.error(f"OpenAI call failed: {e}")
         SummaryGenerationLog.objects.create(
@@ -453,7 +458,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             error_message=str(e),
         )
         raise
-
+    t_parse_save_start = perf_counter()
     summary_text = response.choices[0].message.content
     try:
         summary_json = json.loads(summary_text)
@@ -495,6 +500,8 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             "summary": summary_json
         }
     )
+
+    t_parse_save_end = perf_counter()
     t1 = perf_counter()
     SummaryGenerationLog.objects.create(
         stock=stock,
@@ -507,8 +514,17 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         elapsed_ms=int((t1 - t0) * 1000),
     )
 
+    total_elapsed = t_parse_save_end - t_news_query_start
+
     logger.info(
-        f"[generate_summary] symbol={symbol} llm_and_save_elapsed={t1 - t0:.2f}s"
+        "[generate_summary_breakdown] symbol=%s news_query=%.3fs relevance=%.3fs prompt_build=%.3fs llm=%.3fs parse_save=%.3fs total=%.3fs",
+        symbol,
+        t_news_query_end - t_news_query_start,
+        t_relevance_end - t_relevance_start,
+        t_prompt_end - t_prompt_start,
+        t_llm_end - t_llm_start,
+        t_parse_save_end - t_parse_save_start,
+        total_elapsed,
     )
     SummaryJob.objects.filter(
         id=job_id,
