@@ -542,7 +542,21 @@ def generate_summary_for_stock(self, job_id: int, lease_token: str):
             "job_id": job_id,
             "status": "stale_or_already_started",
         }
+    job = SummaryJob.objects.select_related("stock").get(id=job_id)
+    queue_wait = None
+    if job.dispatched_at:
+        queue_wait = (
+            (job.started_at - job.dispatched_at).total_seconds()
+            if job.started_at and job.dispatched_at
+            else 0.0
+        )
 
+    logger.info(
+        "[generate_summary_for_stock] worker_started job_id=%s symbol=%s queue_wait=%.3f",
+        job.id,
+        job.stock.symbol,
+        queue_wait or 0.0,
+    )
     return _generate_summary_for_stock(job_id, lease_token)
 
 @shared_task
