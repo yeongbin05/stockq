@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     "rest_framework_simplejwt.token_blacklist",  
     'corsheaders',
+    'sandbox',
     'users',
     'stocks',
     'subscriptions',
@@ -193,12 +194,15 @@ LOGGING = {
         },
     },
     "loggers": {
-        # 👇 패키지 이름(폴더명)에 맞춰 설정
-        "django_xbench": { 
+        "django_xbench": {
             "handlers": ["console"],
-            "level": "DEBUG",  # INFO나 DEBUG로 설정해야 보임
+            "level": "DEBUG",
             "propagate": False,
         },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
     },
 }
 

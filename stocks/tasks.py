@@ -565,6 +565,7 @@ def dispatch_summary_jobs(limit: int = 20):
         )
 
         for job in jobs:
+            logger.info("[dispatch_summary_jobs] picked job_id=%s", job.id)
             lease_token = uuid.uuid4()
 
             job.status = SummaryJob.Status.RUNNING
