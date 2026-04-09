@@ -552,6 +552,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
 
     logger.info(
         "[generate_summary_breakdown] symbol=%s news_query=%.3fs relevance=%.3fs prompt_build=%.3fs llm=%.3fs parse_save=%.3fs total=%.3fs",
+        job_id,
         symbol,
         t_news_query_end - t_news_query_start,
         t_relevance_end - t_relevance_start,
@@ -559,6 +560,8 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         t_llm_end - t_llm_start,
         t_parse_save_end - t_parse_save_start,
         total_elapsed,
+        raw_count,
+        relevant_count,
     )
     SummaryJob.objects.filter(
         id=job_id,
