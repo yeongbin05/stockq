@@ -551,7 +551,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
     total_elapsed = t_parse_save_end - t_news_query_start
 
     logger.info(
-        "[generate_summary_breakdown] symbol=%s news_query=%.3fs relevance=%.3fs prompt_build=%.3fs llm=%.3fs parse_save=%.3fs total=%.3fs",
+        "[generate_summary_breakdown] job_id=%s symbol=%s news_query=%.3fs relevance=%.3fs prompt_build=%.3fs llm=%.3fs parse_save=%.3fs total=%.3fs raw_count=%s relevant_count=%s",
         job_id,
         symbol,
         t_news_query_end - t_news_query_start,
