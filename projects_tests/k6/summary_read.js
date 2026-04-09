@@ -3,7 +3,6 @@ import { check, sleep } from "k6";
 
 const BASE_URL = __ENV.BASE_URL || "https://stockqapp.com";
 const PATH = "/api/stocks/summaries/";
-const TOKEN = __ENV.TOKEN || ""; // 선택: 인증 필요하면 Bearer 토큰 넣기
 
 export const options = {
   scenarios: {
@@ -16,24 +15,43 @@ export const options = {
   thresholds: {
     http_req_failed: ["rate<0.01"],
     http_req_duration: [
-      "p(95)<500",  // ✅ 목표 p95(ms) - 필요하면 조정
+      "p(95)<500",
       "p(99)<1000",
     ],
   },
 };
 
-export default function () {
+export function setup() {
+  const res = http.post(
+    `${BASE_URL}/api/auth/token/`,
+    JSON.stringify({
+      username: __ENV.USERNAME,
+      password: __ENV.PASSWORD,
+    }),
+    {
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+
+  check(res, {
+    "token issued (200)": (r) => r.status === 200,
+  });
+
+  const body = res.json();
+  return { access: body.access };
+}
+
+export default function (data) {
   const url = `${BASE_URL}${PATH}`;
 
   const params = {
     headers: {
-      ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
+      Authorization: `Bearer ${data.access}`,
     },
     tags: { name: "summary_read" },
   };
 
   const res = http.get(url, params);
-  console.log(res.headers["Server-Timing"]);
 
   check(res, {
     "status 200": (r) => r.status === 200,
