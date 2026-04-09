@@ -25,7 +25,7 @@ export function setup() {
   const res = http.post(
     `${BASE_URL}/api/auth/token/`,
     JSON.stringify({
-      username: __ENV.USERNAME,
+      username: __ENV.EMAIL,
       password: __ENV.PASSWORD,
     }),
     {
