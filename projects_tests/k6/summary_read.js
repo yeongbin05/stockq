@@ -25,7 +25,7 @@ export function setup() {
   const res = http.post(
     `${BASE_URL}/api/auth/token/`,
     JSON.stringify({
-      username: __ENV.EMAIL,
+      email: __ENV.EMAIL,
       password: __ENV.PASSWORD,
     }),
     {
@@ -36,6 +36,10 @@ export function setup() {
   check(res, {
     "token issued (200)": (r) => r.status === 200,
   });
+
+  if (res.status !== 200) {
+    throw new Error(`login failed: status=${res.status}, body=${res.body}`);
+  }
 
   const body = res.json();
   return { access: body.access };
