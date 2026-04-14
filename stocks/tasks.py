@@ -623,11 +623,23 @@ def dispatch_summary_jobs(limit: int = 20):
             finished_at__isnull=True,
         ).count()
 
+        max_inflight = 2
+        available_slots = max(0, min(limit, max_inflight - inflight_count))
+
         logger.info(
-            "[dispatch_summary_jobs] inflight_count=%s limit=%s",
+            "[dispatch_summary_jobs] inflight_count=%s max_inflight=%s available_slots=%s limit=%s",
             inflight_count,
+            max_inflight,
+            available_slots,
             limit,
         )
+
+        if available_slots == 0:
+            return {
+                "dispatched_count": 0,
+                "job_ids": [],
+            }
+
         jobs = list(
             SummaryJob.objects
             .select_for_update(skip_locked=True)
@@ -638,7 +650,7 @@ def dispatch_summary_jobs(limit: int = 20):
                     retry_at__lte=now,
                 )
             )
-            .order_by("created_at")[:limit]
+            .order_by("created_at")[:available_slots]
         )
 
         for job in jobs:

@@ -391,27 +391,32 @@ class DispatchSummaryJobsTests(TestCase):
         pending_job_2.refresh_from_db()
         already_running_job.refresh_from_db()
 
-        self.assertEqual(result["dispatched_count"], 2)
-        self.assertCountEqual(result["job_ids"], [pending_job_1.id, pending_job_2.id])
+        self.assertEqual(result["dispatched_count"], 1)
+        self.assertEqual(len(result["job_ids"]), 1)
 
-        self.assertEqual(pending_job_1.status, SummaryJob.Status.RUNNING)
-        self.assertEqual(pending_job_2.status, SummaryJob.Status.RUNNING)
-
-        self.assertIsNotNone(pending_job_1.dispatched_at)
-        self.assertIsNotNone(pending_job_2.dispatched_at)
-        self.assertIsNotNone(pending_job_1.lease_token)
-        self.assertIsNotNone(pending_job_2.lease_token)
-
-        self.assertIsNone(pending_job_1.started_at)
-        self.assertIsNone(pending_job_2.started_at)
+        running_jobs = SummaryJob.objects.filter(status=SummaryJob.Status.RUNNING)
+        self.assertEqual(running_jobs.count(), 2)
 
         self.assertEqual(already_running_job.status, SummaryJob.Status.RUNNING)
 
-        mock_delay.assert_has_calls(
-            [call(pending_job_1.id, ANY), call(pending_job_2.id, ANY)],
-            any_order=True,
+        dispatched_pending_jobs = SummaryJob.objects.filter(
+            id__in=[pending_job_1.id, pending_job_2.id],
+            status=SummaryJob.Status.RUNNING,
         )
-        self.assertEqual(mock_delay.call_count, 2)
+        self.assertEqual(dispatched_pending_jobs.count(), 1)
+
+        still_pending_jobs = SummaryJob.objects.filter(
+            id__in=[pending_job_1.id, pending_job_2.id],
+            status=SummaryJob.Status.PENDING,
+        )
+        self.assertEqual(still_pending_jobs.count(), 1)
+
+        dispatched_job = dispatched_pending_jobs.first()
+        self.assertIsNotNone(dispatched_job.dispatched_at)
+        self.assertIsNotNone(dispatched_job.lease_token)
+        self.assertIsNone(dispatched_job.started_at)
+
+        mock_delay.assert_called_once_with(dispatched_job.id, ANY)
 
     @patch("stocks.tasks.generate_summary_for_stock.delay")
     def test_dispatch_summary_jobs_does_not_redispatch_jobs_already_marked_running(
@@ -722,3 +727,7 @@ class GenerateSummaryLeaseStateTests(SummaryJobTestMixin, TestCase):
         self.assertEqual(job.status, SummaryJob.Status.RUNNING)
         self.assertIsNotNone(job.started_at)
         self.assertIsNone(job.finished_at)
+
+
+
+
