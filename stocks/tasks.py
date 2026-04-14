@@ -618,6 +618,16 @@ def dispatch_summary_jobs(limit: int = 20):
     dispatch_targets = []
 
     with transaction.atomic():
+        inflight_count = SummaryJob.objects.filter(
+            status=SummaryJob.Status.RUNNING,
+            finished_at__isnull=True,
+        ).count()
+
+        logger.info(
+            "[dispatch_summary_jobs] inflight_count=%s limit=%s",
+            inflight_count,
+            limit,
+        )
         jobs = list(
             SummaryJob.objects
             .select_for_update(skip_locked=True)
