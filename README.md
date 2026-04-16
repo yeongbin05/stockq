@@ -241,3 +241,5 @@ relevance p95: 1.92s
 Burst dispatch observation
 queue_wait p95: 37.48s
 원인: 잡 17건이 한 번에 디스패치되며 worker queueing 발생
+
+worker concurrency=2 환경에서 SummaryJob 5개를 재현했을 때, 기존 burst dispatch는 작업을 한 번에 enqueue해 queue_wait가 0.101s, 0.122s, 4.922s, 5.286s, 9.289s까지 증가했다. 이를 inflight-slot 기반 dispatch로 변경한 뒤 동일 재현에서 queue_wait를 0.235s, 0.238s, 0.157s, 0.165s, 0.031s 수준으로 유지했다.
