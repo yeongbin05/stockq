@@ -47,7 +47,7 @@ INSTALLED_APPS = [
     'corsheaders',
     # 'sandbox',
     'users',
-    'stocks',
+    'stocks.apps.StocksConfig',
     'subscriptions',
     "drf_spectacular",
     "drf_spectacular_sidecar",
