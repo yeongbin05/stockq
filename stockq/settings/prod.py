@@ -16,7 +16,7 @@ if SENTRY_DSN:
     
 DEBUG = False
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
-
+SUMMARY_JOB_STUCK_SECONDS = 600
 # 예: 배포에서 Postgres 사용
 DATABASES = {
     "default": {

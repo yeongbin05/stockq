@@ -8,13 +8,21 @@ class StocksConfig(AppConfig):
 
     def ready(self):
         from .metrics import (
+            SummaryJobFinishedTotalCollector,
+            SummaryJobQueueWaitSecondsCollector,
             SummaryJobStatusCollector,
+            SummaryJobStuckTotalCollector,
+            SummaryJobTotalElapsedSecondsCollector,
             SummaryJobsOldestPendingSecondsCollector,
         )
 
         collectors = [
             SummaryJobStatusCollector(),
             SummaryJobsOldestPendingSecondsCollector(),
+            SummaryJobFinishedTotalCollector(),
+            SummaryJobQueueWaitSecondsCollector(),
+            SummaryJobTotalElapsedSecondsCollector(),
+            SummaryJobStuckTotalCollector(),
         ]
 
         for collector in collectors:
