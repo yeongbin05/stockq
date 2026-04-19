@@ -15,7 +15,7 @@ if SENTRY_DSN:
     )
     
 DEBUG = False
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",") if os.getenv("ALLOWED_HOSTS") else ["*"]
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
 
 # 예: 배포에서 Postgres 사용
 DATABASES = {
