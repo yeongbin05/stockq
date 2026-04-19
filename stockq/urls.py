@@ -93,6 +93,7 @@ urlpatterns = [
     path('api/stocks/', include('stocks.urls')),
     path("api/subscriptions/", include("subscriptions.urls")),
     path("api/readiness/", readiness),
+    path("", include("django_prometheus.urls")),
 
 ]
 
