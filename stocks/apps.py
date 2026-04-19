@@ -7,9 +7,18 @@ class StocksConfig(AppConfig):
     name = "stocks"
 
     def ready(self):
-        from .metrics import SummaryJobStatusCollector
+        from .metrics import (
+            SummaryJobStatusCollector,
+            SummaryJobsOldestPendingSecondsCollector,
+        )
 
-        try:
-            REGISTRY.register(SummaryJobStatusCollector())
-        except ValueError:
-            pass
+        collectors = [
+            SummaryJobStatusCollector(),
+            SummaryJobsOldestPendingSecondsCollector(),
+        ]
+
+        for collector in collectors:
+            try:
+                REGISTRY.register(collector)
+            except ValueError:
+                pass
