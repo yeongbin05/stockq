@@ -327,24 +327,35 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
     all_news_texts = []
     for news in news_items:
         published_kst = news.published_at.astimezone(kst).strftime("%Y-%m-%d %H:%M")
-        all_news_texts.append(
+        article_summary = ((news.raw_json or {}).get("summary") or "").strip()
+
+        text = (
             f"제목: {news.headline}\n"
             f"출처: {news.source}\n"
             f"시간: {published_kst}\n"
-            f"URL: {news.url if news.url else 'N/A'}"
         )
+        if article_summary:
+            text += f"기사요약: {article_summary}\n"
+        text += f"URL: {news.url if news.url else 'N/A'}"
+
+        all_news_texts.append(text)
 
     news_texts = []
     for item in relevant_news:
         news = item["news"]
         published_kst = news.published_at.astimezone(kst).strftime("%Y-%m-%d %H:%M")
-        news_texts.append(
+        article_summary = ((news.raw_json or {}).get("summary") or "").strip()
+
+        text = (
             f"제목: {news.headline}\n"
             f"출처: {news.source}\n"
             f"시간: {published_kst}\n"
-            f"URL: {news.url if news.url else 'N/A'}"
         )
+        if article_summary:
+            text += f"기사요약: {article_summary}\n"
+        text += f"URL: {news.url if news.url else 'N/A'}"
 
+        news_texts.append(text)
     before_combined_text = "\n\n".join(all_news_texts)
     combined_text = "\n\n".join(news_texts)
 
