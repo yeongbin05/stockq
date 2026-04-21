@@ -1,12 +1,12 @@
-from .models import SummaryJob
-from django.db.models import Count,Q
-from django.utils import timezone
-from prometheus_client.core import GaugeMetricFamily,CounterMetricFamily
-from prometheus_client.registry import Collector
 import math
+from .models import SummaryJob
 from datetime import timedelta
 from django.conf import settings
-
+from django.db.models import Count,Q
+from django.utils import timezone
+from prometheus_client import Counter, Histogram
+from prometheus_client.core import GaugeMetricFamily,CounterMetricFamily
+from prometheus_client.registry import Collector
 
 TERMINAL_STATUSES = [
     SummaryJob.Status.SUCCESS,
@@ -15,6 +15,18 @@ TERMINAL_STATUSES = [
     SummaryJob.Status.NO_RELEVANT_NEWS,
 ]
 
+API_REQUESTS_TOTAL = Counter(
+    "stockq_api_requests_total",
+    "Total API requests",
+    ["route", "method", "status"],
+)
+
+API_REQUEST_LATENCY_SECONDS = Histogram(
+    "stockq_api_request_latency_seconds",
+    "API request latency in seconds",
+    ["route", "method"],
+    buckets=(0.01, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 2, 5),
+)
 
 def _percentile(values, p: float) -> float:
     if not values:

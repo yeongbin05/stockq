@@ -1,106 +1,210 @@
 # Performance & Reliability
 
-## 핵심 요약
+## 문제
 
-- LLM 요약 생성을 요청 경로에서 분리하고, **SummaryJob + Celery 기반 비동기 파이프라인**으로 재구성했습니다.
-- 실측 결과, 주요 병목은 DB가 아니라 **LLM 요약 단계**였으며 **total p95 8.16s**, **llm p95 6.75s**, **relevance p95 1.92s**를 확인했습니다.
-- 기존 burst dispatch로 발생하던 worker queue 적체를 **inflight-slot 기반 dispatch**로 개선해 queue wait를 크게 줄였습니다.
-- 실제 배포 환경에서 `GET /api/stocks/summaries/`는 **20 VU에서 p95 187.3ms, 에러율 0%**로 안정적으로 동작했습니다.
-- Redis Lua 기반 rate limiting, 상태 기반 SummaryJob 관리, 중복 방지, production 검증을 통해 운영 안정성을 강화했습니다.
+StockQ는 미국 주식 뉴스를 수집하고 LLM으로 요약하는 서비스입니다.  
+초기 구조에서 요약 생성을 요청 경로에 직접 두면, 사용자 응답 시간이 길어지고 read API 안정성이 쉽게 흔들릴 수 있었습니다.
+
+또한 운영 관점에서는 다음 문제가 있었습니다.
+
+- LLM 호출이 비용이 크고 latency 편차가 커서 요청 시점 처리에 부적합함
+- Finnhub 같은 외부 API는 rate limit가 있어 배치 작업이 쉽게 불안정해질 수 있음
+- pending 잡을 한 번에 enqueue하는 burst dispatch 방식에서는 worker queue 적체가 발생할 수 있음
+- 비동기 파이프라인은 단순 API 로그만으로는 병목과 적체 지점을 파악하기 어려움
+
+즉, StockQ의 핵심 문제는  
+**“LLM 기반 생성 작업을 요청 경로와 분리하지 않으면 성능과 운영 안정성을 동시에 확보하기 어렵다”**는 점이었습니다.
 
 ---
 
-## 1. 요청 경로와 생성 파이프라인 분리
+## 왜 이 구조를 선택했는지
 
-주식 뉴스 요약을 사용자 요청 시점마다 LLM으로 생성하면 응답 시간이 길어지고 read API의 안정성이 흔들릴 수 있습니다.  
-이를 해결하기 위해 다음과 같은 비동기 파이프라인으로 재구성했습니다.
+이 문제를 해결하기 위해 생성과 조회를 분리한 **비동기 파이프라인 구조**를 선택했습니다.
 
 **Finnhub API → PostgreSQL 저장 → SummaryJob 생성 → Celery worker 요약 생성 → Summary 저장 → Read API 조회**
 
-이 구조를 통해 비용이 큰 생성 작업은 백그라운드에서 처리하고, 사용자 요청 시에는 저장된 결과만 조회하도록 분리했습니다.
+이 구조를 선택한 이유는 다음과 같습니다.
+
+- 비용이 큰 LLM 생성 작업을 사용자 요청 경로에서 분리할 수 있음
+- read API는 저장된 결과만 조회하므로 빠르고 안정적으로 유지할 수 있음
+- SummaryJob 상태를 기준으로 pending / running / success / failed / no_relevant_news 등을 추적할 수 있어 운영이 쉬워짐
+- 외부 API 호출 제어, 재시도, backpressure, stuck job recovery 같은 운영 정책을 작업 파이프라인에 녹일 수 있음
+
+즉, 단순히 “비동기로 바꿨다”가 아니라  
+**LLM 생성 비용, 외부 API 제약, queue 적체, 운영 가시성 문제를 함께 다루기 위해 이 구조를 선택했습니다.**
 
 ---
 
-## 2. 요약 파이프라인 병목 실측
+## 핵심 개선
 
-파이프라인에 stage-level timing을 추가해 실제 병목 구간을 측정했습니다.
+### 1. SummaryJob + Celery 기반 비동기 생성 파이프라인으로 재구성
+LLM 요약 생성을 요청 경로에서 분리하고, 종목/날짜 단위 SummaryJob을 생성한 뒤 Celery worker가 백그라운드에서 처리하도록 바꿨습니다.  
+이로 인해 read API는 저장된 summary만 조회하는 구조가 되었고, 생성 비용과 사용자 응답 경로를 분리할 수 있었습니다.
 
+### 2. Stage-level timing으로 실제 병목 구간 실측
+파이프라인에 stage timing을 추가해 어떤 구간이 실제 병목인지 측정했습니다.  
+그 결과 DB나 dispatcher보다 **LLM 호출 단계가 주 병목**이라는 점을 확인했고, 이후 최적화 우선순위를 DB가 아니라 **LLM latency, 입력량 제어, queue 운영**에 두었습니다.
+
+### 3. Burst dispatch를 inflight-slot 기반 dispatch로 개선
+기존에는 pending 잡을 한 번에 enqueue하는 burst dispatch 방식 때문에 worker queue 적체가 발생했습니다.  
+이를 worker capacity 기준으로만 dispatch하는 **inflight-slot 방식**으로 바꾸어 admission control / backpressure를 적용했습니다.
+
+### 4. Redis Lua 기반 rate limiting으로 외부 API 호출 안정화
+Finnhub 호출 전 `wait_for_slot()`을 두고, Redis + Lua token bucket으로 외부 API 호출량을 제어했습니다.  
+또한 `429 Too Many Requests` 및 네트워크 오류에 대해 exponential backoff retry를 적용해 재시도 폭주를 줄였습니다.
+
+### 5. Relevance filtering으로 LLM 입력량 최적화
+관련 기사만 선별해 LLM에 전달하도록 하여 입력 토큰을 줄였습니다.  
+이를 통해 단순 비용 절감뿐 아니라, 불필요한 기사로 인한 요약 품질 저하도 함께 줄이도록 설계했습니다.
+
+### 6. 운영 관측성 강화
+SummaryJob 상태, queue wait, total elapsed, stuck job 여부를 메트릭으로 노출하고, Grafana 대시보드와 Slack 알람으로 비동기 파이프라인의 상태를 운영자가 바로 확인할 수 있도록 구성했습니다.
+
+---
+
+## 결과 / 지표
+
+### 병목 분석
 - **total p95: 8.16s**
 - **llm p95: 6.75s**
 - **relevance p95: 1.92s**
 
-또한 `AAPL`, `NVDA`, `TSLA`, `MSFT` 기준 벤치마크에서 뉴스 수집은 대체로 **~1초 내외**, 평균 LLM 요약 시간은 **~8.46초**였습니다.
+실측 결과, 주요 병목은 DB가 아니라 **LLM 요약 단계**였습니다.  
+이를 통해 최적화 방향을 DB 튜닝보다 **LLM 비용, latency, 입력량 제어** 쪽으로 좁힐 수 있었습니다.
 
-즉, 주요 병목은 DB가 아니라 **LLM 요약 단계**였고, 이 결과를 바탕으로 최적화 우선순위를 DB보다 **LLM 비용, latency, 입력량 제어**에 두었습니다.
+### Queue wait 개선
+기존 burst dispatch에서는 실제로 queue 적체가 발생했습니다.
 
----
-
-## 3. Inflight-Slot 기반 Dispatch로 Queue Wait 개선
-
-기존에는 pending 잡을 한 번에 enqueue하는 **burst dispatch** 방식 때문에 worker queue 적체가 발생했습니다.  
-실제 관찰에서는 **queue_wait p95 37.48s**가 발생했고, 한 번에 **17개 잡**이 디스패치되며 queueing이 발생했습니다.
-
-`worker concurrency=2` 환경에서 SummaryJob 5개를 재현했을 때:
-
-### 기존 burst dispatch
+**기존 burst dispatch**
 - `0.101s`
 - `0.122s`
 - `4.922s`
 - `5.286s`
 - `9.289s`
 
-### 개선 후 inflight-slot dispatch
+**개선 후 inflight-slot dispatch**
 - `0.235s`
 - `0.238s`
 - `0.157s`
 - `0.165s`
 - `0.031s`
 
-즉, 실제 worker capacity에 맞춰 작업만 dispatch하도록 바꾸어 **admission control / backpressure**를 적용했고, 그 결과 queue 적체를 줄이며 운영 안정성을 높였습니다.
+즉, worker capacity에 맞게 작업을 dispatch하도록 바꾼 뒤  
+**queue 적체를 크게 줄이고 운영 안정성을 높였습니다.**
 
----
-
-## 4. Precomputed Summary 기반 Fast Read Path
-
-LLM 요약 생성은 평균 **~8초 이상**이 걸리기 때문에, 이를 요청 시점에 직접 수행하면 read API latency가 쉽게 악화됩니다.  
-이를 방지하기 위해 요약은 Celery 배치에서 미리 생성하고, API는 저장된 결과만 조회하도록 구성했습니다.
-
-배포 환경에서 `GET /api/stocks/summaries/`를 k6로 테스트한 결과:
+### Read path 성능
+배포 환경에서 `GET /api/stocks/summaries/`를 k6로 측정한 결과:
 
 - **3 VU, 30초**: `p95 87.52ms`, `p99 286.99ms`, `에러율 0%`
 - **10 VU, 30초**: `p95 49.15ms`, `p99 446.83ms`, `에러율 0%`, `약 34.4 RPS`
 - **20 VU, 30초**: `p95 187.3ms`, `p99 242.33ms`, `에러율 0%`, `약 53.9 RPS`
 
-테스트 당시 DB에는 실제 요약 데이터 **59건**이 존재했고, 측정 결과 read API는 **20 VU까지 안정적으로 동작**했습니다.  
-이를 통해 현재 주요 병목은 read API가 아니라 **Celery 기반 요약 파이프라인** 쪽임을 확인했습니다.
+테스트 당시 실제 summary 데이터 59건이 존재했고,  
+read API는 **20 VU까지 안정적으로 동작**했습니다.
 
----
+### Read path 최적화: Serialization 병목 제거
+또한 별도의 read path인 **주식 검색 API**에서는 SQL 자체보다 **직렬화와 응답 크기**가 병목이 되는 문제도 확인했습니다.  
+실제 `?q=a` 검색 요청에서 전체 응답 시간은 약 **3.3초**, payload 크기는 **5.6MB**까지 증가했지만, Django Debug Toolbar 기준 SQL 실행 시간은 **6.11ms**에 불과했습니다.
 
-## 5. 외부 API 안정성과 입력 최적화
+즉, 주요 병목은 DB 쿼리가 아니라 **대량 객체 직렬화, Browsable API 렌더링, 과도한 응답 payload**에 있었습니다.  
+이를 해결하기 위해 검색 API에 `CursorPagination(page_size=20)`을 도입해 한 번에 필요한 데이터만 반환하도록 변경했습니다.
 
-외부 API 제한으로 인한 배치 불안정을 줄이기 위해 다음을 적용했습니다.
+그 결과 JSON 기준 응답 시간은 **1,750ms → 37ms**, 응답 크기는 **2.2MB → 약 30kB**로 줄었고, 최대 **약 47배**의 성능 개선을 확인했습니다.
 
-- Redis + Lua token bucket 기반 rate limiting
-- Finnhub 호출 전 `wait_for_slot()` 적용
-- `429 Too Many Requests` 및 네트워크 오류에 대한 exponential backoff retry
+이 경험을 통해 read path 성능은 SQL 시간만으로 판단할 수 없고, **serializer 처리 비용, payload 크기, TTFB**까지 함께 봐야 한다는 점을 확인했습니다.
 
-또한 LLM 입력 최적화를 위해 relevance filtering을 적용해 관련 기사만 선별했습니다.
+### ORM 최적화: Django N+1 제거
+또한 read path에서는 Django ORM/DRF 사용 시 발생할 수 있는 N+1 문제도 점검했습니다.  
+실제 주식 검색 API에서 `SerializerMethodField`로 즐겨찾기 여부를 계산하던 구현은, 1,000건 조회 시 총 **1,001개의 쿼리**를 발생시켰습니다.
 
+이를 `annotate + Exists` 기반으로 변경하고, serializer가 annotated field를 직접 사용하도록 수정해 **쿼리를 1개로 줄였습니다.**  
+그 결과 응답 시간도 **0.26s → 0.02s**로 개선했습니다.
+
+이 경험을 통해 ORM은 생산성이 높지만, 추상화 뒤에서 N+1 같은 비효율이 쉽게 숨어들 수 있다는 점을 확인했고,  
+이후 read path에서는 쿼리 수와 serializer 접근 패턴을 함께 점검하는 기준을 적용했습니다.
+
+### 입력 최적화
 - `raw_count = 10`
 - `relevant_count = 5`
-- token `400 → 297` (**약 25% 감소**)
+- 입력 token `400 → 297` (**약 25% 감소**)
 
-이를 통해 외부 API 호출 안정성을 높이고, **LLM 비용 효율과 요약 품질**을 함께 개선했습니다.
+이를 통해 LLM 비용 효율과 입력 품질을 함께 개선했습니다.
 
----
-
-## 6. Production Validation
-
-SummaryJob 기반 파이프라인은 production 환경에서 end-to-end로 검증했습니다.
+### Production validation
+production 환경에서 SummaryJob 생성 → dispatch → worker 처리 → summary 저장까지 end-to-end로 검증했습니다.
 
 - 동일 `(stock, date)` 중복 생성 방지
 - `success`, `failed`, `no_relevant_news` 등 상태 기반 추적
-- token `400 → 297` 최적화 확인
 - stuck job 미발생 확인
+- 비동기 생성 파이프라인이 실제 운영 환경에서 동작함을 검증
 
-StockQ는 단순히 뉴스를 요약하는 기능 구현을 넘어서, **LLM 생성 비용 분리, 병목 실측, queue 적체 완화, 외부 API 제어, production 검증**까지 포함해 실제 운영 가능한 구조를 만드는 데 집중한 프로젝트입니다.
+---
+
+
+## SLI / SLO
+
+StockQ는 단순히 기능이 동작하는 수준을 넘어서,  
+read API와 비동기 summary pipeline을 **측정 가능한 운영 지표**로 관리하는 것을 목표로 했습니다.
+
+현재는 SLA(외부 고객 대상 보장)까지 두기보다는,  
+내부 운영 기준인 **SLI / SLO**를 먼저 정의하고 Grafana / Prometheus / Slack 알림과 연결하는 방식으로 관리합니다.
+
+### 1. Read API
+
+| 항목 | SLI | SLO | 비고 |
+|---|---|---|---|
+| Read API latency | `GET /api/stocks/summaries/`의 p95 latency | **p95 < 300ms** | 사용자가 직접 체감하는 응답속도 |
+| Read API error rate | Read API 요청 중 실패 비율 | **< 1%** | 현재는 기본 메트릭 기준으로 관리, 추후 커스텀 API 메트릭으로 보강 예정 |
+
+### 2. Summary Pipeline
+
+| 항목 | SLI | SLO | 비고 |
+|---|---|---|---|
+| SummaryJob success rate | `success / (success + failed)` | **> 95%** | 요약이 실제로 정상 생성되는 비율 |
+| Stuck job count | `summary_job_stuck_total` | **0 유지** | RUNNING 상태로 비정상 장시간 정체된 job 탐지 |
+| Failed job | 최근 5분 failed 발생 수 | **0 목표** | 개별 종목 요약 실패를 빠르게 인지하기 위한 운영 기준 |
+| End-to-end latency | `summary_job_total_elapsed_seconds{stat="p95"}` | **p95 < 15s** | SummaryJob 생성부터 완료까지의 처리시간 |
+
+### 3. Freshness
+
+| 항목 | SLI | SLO | 비고 |
+|---|---|---|---|
+| Summary freshness | SummaryJob 생성 후 summary가 준비되기까지 걸린 시간 | **생성 후 15분 내 95% 완료 목표** | 배치 완료 품질과 사용자 관점의 신선도 관리용. 현재는 초안 단계이며 추후 보강 예정 |
+
+### 4. Dependency / Infra
+
+| 항목 | SLI | SLO | 비고 |
+|---|---|---|---|
+| Readiness | DB / Redis / Finnhub readiness 상태 | **정상 유지** | 인프라 및 외부 의존성 장애 감지 |
+| Host health | CPU / Memory / Disk / Network 상태 | **임계치 초과 없음** | 인프라 원인 분석용 보조 지표 |
+
+### 운영 원칙
+
+- **SLI**는 실제로 측정하는 운영 지표입니다.
+- **SLO**는 해당 지표에 대해 내부적으로 목표로 삼는 값입니다.
+- 현재 StockQ는 개인 프로젝트 단계이므로, 외부 고객과의 계약 수준인 **SLA**까지 두기보다는 **SLI / SLO** 중심으로 운영 기준을 정의했습니다.
+- 알림은 모든 지표에 일괄적으로 거는 것이 아니라, 실제 대응 가치가 높은 항목부터 우선 적용했습니다.
+  - `stuck job > 0`
+  - 최근 5분 `failed > 0`
+
+### 현재 상태
+
+- Prometheus / Grafana 기반 메트릭 수집 및 시각화 구성 완료
+- SummaryJob 관련 커스텀 메트릭 구현 완료
+- Slack 알림 연동 완료
+- 현재 적용 중인 대표 알림
+  - `summary_job_stuck_total > 0`
+  - 최근 5분 `failed SummaryJob > 0`
+
+### 앞으로의 보강 예정
+
+- API request count / error rate를 route 기준으로 더 정확히 보기 위한 커스텀 API 메트릭 추가
+- freshness SLI를 실제 운영 지표로 정교화
+- 알림 레벨(info / warning / critical) 체계화
+- SLO 달성률을 주간/월간 단위로 점검하는 방식으로 확장
+
+
+## 한 줄 정리
+
+StockQ는 단순한 뉴스 요약 기능 구현을 넘어서,  
+“StockQ는 LLM 생성 작업을 요청 경로에서 분리하고, 병목을 실측해 queue 적체·직렬화·N+1 문제를 개선하며, 외부 API 제어와 운영 관측성까지 갖춘 비동기 파이프라인 프로젝트입니다.”

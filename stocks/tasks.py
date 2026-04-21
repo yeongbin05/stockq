@@ -130,7 +130,6 @@ def recover_stuck_summary_jobs():
     }
 
 
-from time import perf_counter
 
 @shared_task(bind=True)
 def fetch_favorite_news(self, days: int = 1):
