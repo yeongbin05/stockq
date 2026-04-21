@@ -153,10 +153,21 @@ read API와 비동기 summary pipeline을 **측정 가능한 운영 지표**로 
 
 | 항목 | SLI | SLO | 비고 |
 |---|---|---|---|
-| Read API latency | `GET /api/stocks/summaries/`의 p95 latency | **p95 < 300ms** | 사용자가 직접 체감하는 응답속도 |
-| Read API error rate | Read API 요청 중 실패 비율 | **< 1%** | 현재는 기본 메트릭 기준으로 관리, 추후 커스텀 API 메트릭으로 보강 예정 |
+| Read API latency | `GET /api/stocks/summaries/`의 p95 latency | **p95 < 300ms** | route 기준 커스텀 histogram 메트릭으로 측정 |
+| Read API error rate | `GET /api/stocks/summaries/`의 5xx error rate | **< 1%** | route / method / status 라벨 기반 커스텀 counter 메트릭으로 측정 |
+| Read API request rate | `GET /api/stocks/summaries/`의 최근 5분 요청량 | 참고 지표 | read path 사용량과 트래픽 변화를 보기 위한 운영 지표 |
+| Read API successful requests | `GET /api/stocks/summaries/`의 최근 5분 성공 요청 수 | 참고 지표 | 실제 성공 호출 여부와 테스트 검증용 보조 지표 
 
-### 2. Summary Pipeline
+### 2. Search API
+
+| 항목 | SLI | SLO | 비고 |
+|---|---|---|---|
+| Search API latency | `GET /api/stocks/search/`의 p95 latency | **p95 < 300ms** | route 기준 커스텀 histogram 메트릭으로 측정 |
+| Search API error rate | `GET /api/stocks/search/`의 5xx error rate | **< 1%** | route / method / status 라벨 기반 커스텀 counter 메트릭으로 측정 |
+| Search API request rate | `GET /api/stocks/search/`의 최근 5분 요청량 | 참고 지표 | 검색 사용량과 트래픽 변화를 보기 위한 운영 지표 |
+| Search API successful requests | `GET /api/stocks/search/`의 최근 5분 성공 요청 수 | 참고 지표 | 실제 성공 호출 여부와 테스트 검증용 보조 지표 ||
+
+### 3. Summary Pipeline
 
 | 항목 | SLI | SLO | 비고 |
 |---|---|---|---|
@@ -165,13 +176,13 @@ read API와 비동기 summary pipeline을 **측정 가능한 운영 지표**로 
 | Failed job | 최근 5분 failed 발생 수 | **0 목표** | 개별 종목 요약 실패를 빠르게 인지하기 위한 운영 기준 |
 | End-to-end latency | `summary_job_total_elapsed_seconds{stat="p95"}` | **p95 < 15s** | SummaryJob 생성부터 완료까지의 처리시간 |
 
-### 3. Freshness
+### 4. Freshness
 
 | 항목 | SLI | SLO | 비고 |
 |---|---|---|---|
 | Summary freshness | SummaryJob 생성 후 summary가 준비되기까지 걸린 시간 | **생성 후 15분 내 95% 완료 목표** | 배치 완료 품질과 사용자 관점의 신선도 관리용. 현재는 초안 단계이며 추후 보강 예정 |
 
-### 4. Dependency / Infra
+### 5. Dependency / Infra
 
 | 항목 | SLI | SLO | 비고 |
 |---|---|---|---|
@@ -184,27 +195,37 @@ read API와 비동기 summary pipeline을 **측정 가능한 운영 지표**로 
 - **SLO**는 해당 지표에 대해 내부적으로 목표로 삼는 값입니다.
 - 현재 StockQ는 개인 프로젝트 단계이므로, 외부 고객과의 계약 수준인 **SLA**까지 두기보다는 **SLI / SLO** 중심으로 운영 기준을 정의했습니다.
 - 알림은 모든 지표에 일괄적으로 거는 것이 아니라, 실제 대응 가치가 높은 항목부터 우선 적용했습니다.
-  - `stuck job > 0`
-  - 최근 5분 `failed > 0`
+  - `summary_job_stuck_total > 0`
+  - 최근 5분 `failed SummaryJob > 0`
 
 ### 현재 상태
 
 - Prometheus / Grafana 기반 메트릭 수집 및 시각화 구성 완료
 - SummaryJob 관련 커스텀 메트릭 구현 완료
+- `GET /api/stocks/summaries/` 전용 route 기반 커스텀 API 메트릭 추가 완료
+- `GET /api/stocks/search/` 전용 route 기반 커스텀 API 메트릭 추가 완료
 - Slack 알림 연동 완료
 - 현재 적용 중인 대표 알림
   - `summary_job_stuck_total > 0`
   - 최근 5분 `failed SummaryJob > 0`
+- 현재 확인 가능한 대표 API 지표
+  - Read API p95 latency
+  - Read API request rate
+  - Read API error rate
+  - Read API successful requests (Last 5m)
+  - Search API p95 latency
+  - Search API request rate
+  - Search API error rate
+  - Search API successful requests (Last 5m)
 
 ### 앞으로의 보강 예정
 
-- API request count / error rate를 route 기준으로 더 정확히 보기 위한 커스텀 API 메트릭 추가
+- favorites, auth 등 다른 핵심 API에도 route 기준 커스텀 API 메트릭 확장
 - freshness SLI를 실제 운영 지표로 정교화
 - 알림 레벨(info / warning / critical) 체계화
 - SLO 달성률을 주간/월간 단위로 점검하는 방식으로 확장
 
-
 ## 한 줄 정리
 
 StockQ는 단순한 뉴스 요약 기능 구현을 넘어서,  
-“StockQ는 LLM 생성 작업을 요청 경로에서 분리하고, 병목을 실측해 queue 적체·직렬화·N+1 문제를 개선하며, 외부 API 제어와 운영 관측성까지 갖춘 비동기 파이프라인 프로젝트입니다.”
+LLM 생성 작업을 요청 경로에서 분리하고, 병목을 실측해 queue 적체·직렬화·N+1 문제를 개선했으며, summaries/search 핵심 read API에 대한 route 기준 메트릭과 운영 알림까지 갖춘 비동기 파이프라인 프로젝트입니다.
