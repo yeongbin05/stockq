@@ -26,7 +26,7 @@ urlpatterns = [
     # 뉴스 요약
     path(
         "summaries/",
-        NewsSummaryViewSet.as_view({"get": "list", "post": "create"}),
+        NewsSummaryViewSet.as_view({"get": "list"}),
         name="news-summary-list-create",
     ),
     path(
