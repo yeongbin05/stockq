@@ -1,12 +1,9 @@
-import re,requests,logging
+import re,logging
 from .models import FavoriteStock, Stock,News,Summary
 from .serializers import FavoriteStockSerializer, StockSearchSerializer,NewsSerializer
 from .services import upsert_news_for_symbol
 from .tasks import generate_summary_for_stock
-from django.conf import settings
-from django.core.cache import cache
 from django.db.models import Q,Prefetch
-from django.http import JsonResponse
 from django.utils import timezone as django_timezone
 from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404

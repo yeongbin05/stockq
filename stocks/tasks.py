@@ -9,10 +9,10 @@ from django.utils import timezone
 from stocks.services import upsert_news_for_symbol  
 from stocks.models import Stock, News,Summary,FavoriteStock,SummaryGenerationLog,SummaryJob
 from stocks.utils import score_news_relevance
-from stocks.rate_limit import get_openai_bucket
+from stocks.rate_limit import get_openai_bucket, get_finnhub_bucket
 from time import perf_counter
 from zoneinfo import ZoneInfo
-from stocks.rate_limit import get_openai_bucket, get_finnhub_bucket
+
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
