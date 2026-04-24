@@ -9,6 +9,11 @@ class Stock(models.Model):
     exchange = models.CharField(max_length=50)                            # e.g., NASDAQ, NYSE
     currency = models.CharField(max_length=10, blank=True, default="USD")
     type = models.CharField(max_length=20, blank=True, default="Stock")   # Stock, ETF...
+
+    logo_url = models.URLField(max_length=1000, blank=True, default="")
+    web_url = models.URLField(max_length=1000, blank=True, default="")
+    profile_fetched_at = models.DateTimeField(null=True, blank=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

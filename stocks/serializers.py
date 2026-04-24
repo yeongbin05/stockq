@@ -1,15 +1,38 @@
 from django.db import IntegrityError, transaction
 from rest_framework import serializers, exceptions
 from .models import FavoriteStock, Stock, FavoriteStock,News
-from rest_framework import serializers
 
 
 class StockDetailSerializer(serializers.ModelSerializer):
     """즐겨찾기 응답용 Stock 정보"""
+
+    latest_price = serializers.SerializerMethodField()
+    change_percent = serializers.SerializerMethodField()
+
     class Meta:
         model = Stock
-        fields = ["id", "symbol", "name", "exchange", "currency"]
+        fields = [
+            "id",
+            "symbol",
+            "name",
+            "exchange",
+            "currency",
+            "logo_url",
+            "latest_price",
+            "change_percent",
+        ]
 
+    def get_latest_price(self, obj):
+        latest = obj.prices.order_by("-timestamp").first()
+        if not latest:
+            return None
+        return float(latest.price)
+
+    def get_change_percent(self, obj):
+        latest = obj.prices.order_by("-timestamp").first()
+        if not latest or latest.change_percent is None:
+            return None
+        return float(latest.change_percent)
 
 class FavoriteStockSerializer(serializers.ModelSerializer):
     symbol = serializers.CharField(write_only=True)  # 클라에서 symbol 받음
@@ -46,20 +69,44 @@ class FavoriteStockSerializer(serializers.ModelSerializer):
         except IntegrityError:
             raise serializers.ValidationError({"detail": "Already favorited"}, code=409)
 
-
 class StockSearchSerializer(serializers.ModelSerializer):
-    # 👇 "계산된 값(is_favorite_annotated)을 그냥 갖다 써라"고 변경
-    is_favorite = serializers.BooleanField(source='is_favorite_annotated', default=False, read_only=True)
+    is_favorite = serializers.BooleanField(
+        source="is_favorite_annotated",
+        default=False,
+        read_only=True,
+    )
+    latest_price = serializers.SerializerMethodField()
+    change_percent = serializers.SerializerMethodField()
 
     class Meta:
         model = Stock
-        fields = ["id", "symbol", "name", "exchange", "is_favorite"]
-    
+        fields = [
+            "id",
+            "symbol",
+            "name",
+            "exchange",
+            "logo_url",
+            "latest_price",
+            "change_percent",
+            "is_favorite",
+        ]
+
+    def get_latest_price(self, obj):
+        latest = obj.prices.order_by("-timestamp").first()
+        if not latest:
+            return None
+        return float(latest.price)
+
+    def get_change_percent(self, obj):
+        latest = obj.prices.order_by("-timestamp").first()
+        if not latest or latest.change_percent is None:
+            return None
+        return float(latest.change_percent)
 
 class StockBriefSerializer(serializers.ModelSerializer):
     class Meta:
         model = Stock
-        fields = ("symbol", "name")
+        fields = ("symbol", "name","logo_url")
 
 class NewsSerializer(serializers.ModelSerializer):
     stocks = StockBriefSerializer(many=True, read_only=True)
