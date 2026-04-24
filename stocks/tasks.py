@@ -1,21 +1,66 @@
-import openai,json,logging,uuid
+import openai,json,logging,uuid,requests
 
 from celery import shared_task
 from datetime import datetime, timedelta,time, timezone as dt_timezone
+from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from stocks.services import upsert_news_for_symbol  
-from stocks.models import Stock, News,Summary,FavoriteStock,SummaryGenerationLog,SummaryJob
-from stocks.utils import score_news_relevance
-from stocks.rate_limit import get_openai_bucket, get_finnhub_bucket
+from stocks.models import Stock, News,Summary,SummaryGenerationLog,SummaryJob,Price
+from stocks.utils import score_news_relevance,wait_for_slot
+from stocks.rate_limit import get_openai_bucket
 from time import perf_counter
 from zoneinfo import ZoneInfo
-
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+
+def fetch_finnhub_quote(symbol):
+    response = requests.get(
+        "https://finnhub.io/api/v1/quote",
+        params={
+            "symbol": symbol,
+            "token": settings.FINNHUB_API_KEY,
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+def update_stock_quote(stock):
+    if not wait_for_slot("rate_limit:finnhub", capacity=5, rate=1):
+        logger.info(
+            "[update_stock_quote] symbol=%s status=rate_limited",
+            stock.symbol,
+        )
+        return None
+
+    data = fetch_finnhub_quote(stock.symbol)
+
+    current_price = data.get("c")
+    change_percent = data.get("dp")
+    timestamp = data.get("t")
+
+    if not current_price or current_price == 0:
+        return None
+
+    quote_time = (
+        timezone.datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        if timestamp
+        else timezone.now()
+    )
+
+    return Price.objects.update_or_create(
+        stock=stock,
+        timestamp=quote_time,
+        defaults={
+            "price": Decimal(str(current_price)),
+            "change_percent": Decimal(str(change_percent)) if change_percent is not None else None,
+        },
+    )
 
 def _is_current_lease(job_id: int, lease_token: str) -> bool:
     return SummaryJob.objects.filter(
@@ -134,10 +179,9 @@ def recover_stuck_summary_jobs():
 
 @shared_task(bind=True)
 def fetch_favorite_news(self, days: int = 1):
-    symbols = (
-        FavoriteStock.objects
-        .select_related("stock")
-        .values_list("stock__symbol", flat=True)
+    stocks = (
+        Stock.objects
+        .filter(favorited_by__isnull=False)
         .distinct()
     )
 
@@ -148,40 +192,24 @@ def fetch_favorite_news(self, days: int = 1):
 
     today = timezone.localdate()
 
-    for symbol in symbols:
+    for stock in stocks:
+        symbol = stock.symbol
         try:
             t_symbol_start = perf_counter()
-
-            t_bucket_start = perf_counter()
-            if settings.FINNHUB_BUCKET_ENABLED:
-                bucket = get_finnhub_bucket()
-                bucket_result = bucket.consume(tokens=1)
-
-                if not bucket_result.allowed:
-                    t_bucket_end = perf_counter()
-                    logger.info(
-                        "[fetch_favorite_news_breakdown] symbol=%s bucket=%.3fs upsert=0.000s enqueue=0.000s total=%.3fs status=rate_limited retry_after=%s",
-                        symbol,
-                        t_bucket_end - t_bucket_start,
-                        t_bucket_end - t_symbol_start,
-                        bucket_result.retry_after_seconds,
-                    )
-                    results.append({
-                        "symbol": symbol,
-                        "status": "rate_limited",
-                        "retry_after": bucket_result.retry_after_seconds,
-                        "error": f"Rate limit wait timeout: {symbol}",
-                    })
-                    failed_symbols.append({
-                        "symbol": symbol,
-                        "error": f"Rate limit wait timeout: {symbol}",
-                    })
-                    continue
-            t_bucket_end = perf_counter()
-
             t_upsert_start = perf_counter()
             res = upsert_news_for_symbol(symbol, days=days)
             t_upsert_end = perf_counter()
+
+            t_quote_start = perf_counter()
+            try:
+                update_stock_quote(stock)
+            except Exception:
+                logger.warning(
+                    "[fetch_favorite_news] quote update failed symbol=%s",
+                    symbol,
+                    exc_info=True,
+                )
+            t_quote_end = perf_counter()
 
             t_enqueue_start = perf_counter()
             results.append({"symbol": symbol, **res})
@@ -198,7 +226,6 @@ def fetch_favorite_news(self, days: int = 1):
 
             created = False
             if has_new_input and not summary_exists_today:
-                stock = Stock.objects.get(symbol__iexact=symbol)
                 _, created = SummaryJob.objects.get_or_create(
                     stock=stock,
                     date=today,
@@ -209,10 +236,10 @@ def fetch_favorite_news(self, days: int = 1):
             t_enqueue_end = perf_counter()
 
             logger.info(
-                "[fetch_favorite_news_breakdown] symbol=%s bucket=%.3fs upsert=%.3fs enqueue=%.3fs total=%.3fs created_news=%s linked_pairs=%s enqueued=%s",
+                "[fetch_favorite_news_breakdown] symbol=%s upsert=%.3fs quote=%.3fs enqueue=%.3fs total=%.3fs created_news=%s linked_pairs=%s enqueued=%s",
                 symbol,
-                t_bucket_end - t_bucket_start,
                 t_upsert_end - t_upsert_start,
+                t_quote_end - t_quote_start,
                 t_enqueue_end - t_enqueue_start,
                 t_enqueue_end - t_symbol_start,
                 res.get("created_news", 0),
