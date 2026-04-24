@@ -1,11 +1,20 @@
+from django.db.models import OuterRef, Subquery
 from django.utils import timezone as django_timezone
 from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from stocks.models import FavoriteStock, Stock, Summary
+from stocks.models import FavoriteStock, Stock, Summary,Price
 from stocks.tasks import generate_summary_for_stock
 
+def build_stock_payload(stock, latest_price=None, change_percent=None):
+    return {
+        "symbol": stock.symbol,
+        "name": stock.name,
+        "logo_url": stock.logo_url,
+        "latest_price": float(latest_price) if latest_price is not None else None,
+        "change_percent": float(change_percent) if change_percent is not None else None,
+    }
 
 class NewsSummaryViewSet(viewsets.ViewSet):
     """
@@ -19,11 +28,18 @@ class NewsSummaryViewSet(viewsets.ViewSet):
 
     def list(self, request):
         today = django_timezone.now().date()
+        latest_price_qs = Price.objects.filter(
+            stock_id=OuterRef("stock_id")
+        ).order_by("-timestamp")
 
         favs = (
             FavoriteStock.objects.filter(user=request.user)
             .select_related("stock")
-            .only("stock__id", "stock__symbol", "stock__name")
+            .only("stock__id", "stock__symbol", "stock__name", "stock__logo_url")
+            .annotate(
+                latest_price=Subquery(latest_price_qs.values("price")[:1]),
+                latest_change_percent=Subquery(latest_price_qs.values("change_percent")[:1]),
+            )
         )
         stock_ids = [f.stock_id for f in favs]
 
@@ -39,7 +55,11 @@ class NewsSummaryViewSet(viewsets.ViewSet):
             s = summary_map.get(f.stock_id)
             data.append(
                 {
-                    "stock": {"symbol": f.stock.symbol, "name": f.stock.name},
+                    "stock": build_stock_payload(
+                        f.stock,
+                        latest_price=f.latest_price,
+                        change_percent=f.latest_change_percent,
+                    ),
                     "date": today.isoformat(),
                     "summary": s.summary if s else None,
                     "summary_exists": bool(s),
@@ -120,8 +140,19 @@ class NewsSummaryViewSet(viewsets.ViewSet):
         symbol = symbol.upper()
         today = django_timezone.now().date()
 
+        latest_price_qs = Price.objects.filter(
+            stock_id=OuterRef("pk")
+        ).order_by("-timestamp")
         # 1) 종목 존재 확인
-        stock = Stock.objects.filter(symbol__iexact=symbol).only("id", "symbol", "name").first()
+        stock = (
+            Stock.objects.filter(symbol__iexact=symbol)
+            .only("id", "symbol", "name", "logo_url")
+            .annotate(
+                latest_price=Subquery(latest_price_qs.values("price")[:1]),
+                latest_change_percent=Subquery(latest_price_qs.values("change_percent")[:1]),
+            )
+            .first()
+        )
         if not stock:
             return Response(
                 {"error": "해당 종목을 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND
@@ -139,7 +170,11 @@ class NewsSummaryViewSet(viewsets.ViewSet):
         if not s:
             return Response(
                 {
-                    "stock": {"symbol": stock.symbol, "name": stock.name},
+                    "stock": build_stock_payload(
+                        stock,
+                        latest_price=stock.latest_price,
+                        change_percent=stock.latest_change_percent,
+                    ),
                     "date": today.isoformat(),
                     "summary": None,
                     "summary_exists": False,
@@ -149,7 +184,11 @@ class NewsSummaryViewSet(viewsets.ViewSet):
 
         return Response(
             {
-                "stock": {"symbol": stock.symbol, "name": stock.name},
+                "stock": build_stock_payload(
+                    stock,
+                    latest_price=stock.latest_price,
+                    change_percent=stock.latest_change_percent,
+                ),
                 "date": s.date.isoformat(),
                 "summary": s.summary,
                 "summary_exists": True,
