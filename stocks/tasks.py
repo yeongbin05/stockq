@@ -48,7 +48,7 @@ def update_stock_quote(stock):
         return None
 
     quote_time = (
-        timezone.datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        datetime.fromtimestamp(timestamp, tz=dt_timezone.utc)
         if timestamp
         else timezone.now()
     )
