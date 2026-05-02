@@ -8,11 +8,11 @@ services:
     container_name: stockq_web
     restart: always
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
-      DJANGO_SETTINGS_MODULE: stockq.settings.prod 
+      DJANGO_SETTINGS_MODULE: stockq.settings.prod
     command: >
       python -m gunicorn stockq.wsgi:application
       --bind 0.0.0.0:8000
@@ -35,7 +35,7 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
 
   redis:
     image: redis:7
@@ -43,8 +43,6 @@ services:
     restart: always
     volumes:
       - redis_data:/data
-    ports:
-      - "6379:6379"
 
   celery_worker:
     build:
@@ -77,7 +75,6 @@ services:
       - .env
     environment:
       DJANGO_SETTINGS_MODULE: stockq.settings.prod
-
 
 volumes:
   db_data:
