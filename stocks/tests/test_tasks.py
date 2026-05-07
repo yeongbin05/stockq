@@ -54,7 +54,7 @@ class SummaryJobTestMixin:
 
 
 class GenerateSummaryEmptyBranchTests(SummaryJobTestMixin, TestCase):
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
     def test_generate_summary_logs_no_news_when_no_news_exists(self):
         stock, job = self.create_job(symbol="AAPL", name="Apple")
 
@@ -75,7 +75,7 @@ class GenerateSummaryEmptyBranchTests(SummaryJobTestMixin, TestCase):
         self.assertEqual(log.before_input_tokens, 0)
         self.assertEqual(log.after_input_tokens, 0)
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
     @patch("stocks.tasks.openai.chat.completions.create")
     @patch("stocks.tasks.score_news_relevance")
     def test_generate_summary_logs_no_relevant_news_when_all_news_filtered_out(
@@ -115,7 +115,7 @@ class GenerateSummaryEmptyBranchTests(SummaryJobTestMixin, TestCase):
 
 
 class GenerateSummaryIdempotencyTests(SummaryJobTestMixin, TestCase):
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
     @patch("stocks.tasks.openai.chat.completions.create")
     @patch("stocks.tasks.score_news_relevance")
     def test_generate_summary_does_not_create_duplicate_summary_for_same_stock_and_date(
@@ -230,7 +230,7 @@ class FetchFavoriteNewsJobCreationTests(TestCase):
 
 
 class GenerateSummaryFailureTests(SummaryJobTestMixin, TestCase):
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
     @patch("stocks.tasks.openai.chat.completions.create")
     @patch("stocks.tasks.score_news_relevance")
     def test_generate_summary_fails_and_logs_when_json_parse_fails(
@@ -277,7 +277,7 @@ class GenerateSummaryFailureTests(SummaryJobTestMixin, TestCase):
         self.assertIsNotNone(job.finished_at)
         self.assertIn("json_parse_failed", job.error_message)
 
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
     @patch("stocks.tasks.openai.chat.completions.create")
     @patch("stocks.tasks.score_news_relevance")
     def test_generate_summary_fails_and_logs_when_openai_call_fails(
@@ -627,7 +627,7 @@ class RecoverStuckSummaryJobsTests(TestCase):
 
 
 class GenerateSummaryLeaseStateTests(SummaryJobTestMixin, TestCase):
-    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test")
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
     @patch("stocks.tasks.openai.chat.completions.create")
     @patch("stocks.tasks.score_news_relevance")
     @patch("stocks.tasks._is_current_lease")

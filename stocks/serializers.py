@@ -34,6 +34,7 @@ class StockDetailSerializer(serializers.ModelSerializer):
             return None
         return float(latest.change_percent)
 
+
 class FavoriteStockSerializer(serializers.ModelSerializer):
     symbol = serializers.CharField(write_only=True)  # 클라에서 symbol 받음
     stock = StockDetailSerializer(read_only=True)  # 조회 시 stock 전체 정보 반환
@@ -69,14 +70,23 @@ class FavoriteStockSerializer(serializers.ModelSerializer):
         except IntegrityError:
             raise serializers.ValidationError({"detail": "Already favorited"}, code=409)
 
+
 class StockSearchSerializer(serializers.ModelSerializer):
     is_favorite = serializers.BooleanField(
         source="is_favorite_annotated",
         default=False,
         read_only=True,
     )
-    latest_price = serializers.SerializerMethodField()
-    change_percent = serializers.SerializerMethodField()
+    latest_price = serializers.FloatField(
+        source="latest_price_annotated",
+        allow_null=True,
+        read_only=True,
+    )
+    change_percent = serializers.FloatField(
+        source="latest_change_percent_annotated",
+        allow_null=True,
+        read_only=True,
+    )
 
     class Meta:
         model = Stock
@@ -91,17 +101,6 @@ class StockSearchSerializer(serializers.ModelSerializer):
             "is_favorite",
         ]
 
-    def get_latest_price(self, obj):
-        latest = obj.prices.order_by("-timestamp").first()
-        if not latest:
-            return None
-        return float(latest.price)
-
-    def get_change_percent(self, obj):
-        latest = obj.prices.order_by("-timestamp").first()
-        if not latest or latest.change_percent is None:
-            return None
-        return float(latest.change_percent)
 
 class StockBriefSerializer(serializers.ModelSerializer):
     class Meta:
