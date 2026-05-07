@@ -19,12 +19,16 @@ services:
       dockerfile: Dockerfile.dev
     command: >
       sh -c "./scripts/wait-for-db.sh &&
-             python manage.py migrate &&
-             python manage.py test --keepdb"
+             python manage.py migrate --noinput &&
+             python -m pytest -q"
     environment:
       DJANGO_SETTINGS_MODULE: stockq.settings.ci
-    env_file:
-      - .env
+      SECRET_KEY: dummy-secret-key
+      OPENAI_API_KEY: dummy-openai-key
+      FINNHUB_API_KEY: dummy-finnhub-key
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/2
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
     depends_on:
       - db
       - redis
