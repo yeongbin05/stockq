@@ -140,6 +140,108 @@ production 환경에서 SummaryJob 생성 → dispatch → worker 처리 → sum
 
 ---
 
+## 로컬 실행
+
+### 1. 환경 변수 준비
+
+```bash
+cp .env.example .env
+```
+
+`.env.example`에는 로컬 실행에 필요한 Django, OpenAI/Finnhub, Postgres, Redis/Celery 예시 값이 들어 있습니다. 실제 외부 API를 호출하려면 `OPENAI_API_KEY`, `FINNHUB_API_KEY`를 본인 키로 교체하세요.
+
+### 2. Docker로 실행
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build db redis web celery_worker celery_beat
+docker compose -f docker-compose.dev.yml exec web python manage.py migrate
+docker compose -f docker-compose.dev.yml exec web python manage.py runserver 0.0.0.0:8000
+```
+
+개발용 compose의 `web` 서비스는 기본적으로 대기 상태로 실행되므로, 위처럼 `runserver`를 명시적으로 실행합니다.
+
+### 3. 로컬 Python으로 실행
+
+```bash
+pip install -r requirements-dev.txt
+python manage.py migrate
+python manage.py runserver
+```
+
+기본 로컬 설정은 `pytest.ini`와 `stockq/settings/local.py` 기준으로 SQLite와 로컬 개발 설정을 사용합니다.
+
+## 테스트 계정
+
+포트폴리오 확인용 계정은 다음 값을 사용합니다.
+
+- email: `test1@test.com`
+- password: `1111`
+
+로컬 DB에 계정이 없다면 회원가입 API 또는 Django shell로 동일한 계정을 생성한 뒤 사용하세요.
+
+## 핵심 API 사용 흐름
+
+아래 예시는 `http://localhost:8000` 기준입니다. 인증이 필요한 API는 `Authorization: Bearer <access>` 헤더를 포함합니다.
+
+### 1. 로그인
+
+```bash
+curl -X POST http://localhost:8000/api/auth/token/ \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test1@test.com","password":"1111"}'
+```
+
+응답의 `access` 값을 이후 요청의 Bearer token으로 사용합니다.
+
+### 2. 종목 검색
+
+```bash
+curl "http://localhost:8000/api/stocks/search/?q=AAPL" \
+  -H "Authorization: Bearer <access>"
+```
+
+검색 API는 cursor pagination을 사용하며, 즐겨찾기 여부와 최신 가격 정보는 DB annotation으로 계산해 serializer 단계의 per-object 조회를 피합니다.
+
+### 3. 즐겨찾기 추가 / 삭제
+
+```bash
+curl -X POST http://localhost:8000/api/stocks/favorites/ \
+  -H "Authorization: Bearer <access>" \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"AAPL"}'
+
+curl -X DELETE http://localhost:8000/api/stocks/favorites/AAPL/ \
+  -H "Authorization: Bearer <access>"
+```
+
+### 4. 저장된 요약 조회
+
+```bash
+curl http://localhost:8000/api/stocks/summaries/ \
+  -H "Authorization: Bearer <access>"
+
+curl http://localhost:8000/api/stocks/summaries/AAPL/ \
+  -H "Authorization: Bearer <access>"
+```
+
+일반 사용자용 summaries API는 저장된 Summary를 조회하는 read API입니다. 요약 생성은 사용자 요청 경로에서 직접 LLM을 호출하지 않고, `SummaryJob` 생성 후 dispatcher가 capacity/inflight 기준으로 dispatch하고 Celery worker가 `generate_summary_for_stock(job_id, lease_token)`을 처리하는 공식 비동기 파이프라인에서 수행됩니다.
+
+## 테스트 실행
+
+CI와 동일한 Postgres/Redis 환경에서 테스트하려면 Docker Compose를 사용합니다.
+
+```bash
+docker compose -f docker-compose.ci.yml up --build --abort-on-container-exit --exit-code-from web
+```
+
+로컬 Python 환경에서 실행하려면 의존성을 설치한 뒤 pytest를 실행합니다.
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+`pytest.ini`는 일반 로컬 실행을 위해 `stockq.settings.local`을 기본값으로 사용하고, Docker CI에서는 `DJANGO_SETTINGS_MODULE=stockq.settings.ci`로 덮어써서 Postgres/Redis 기반 테스트를 실행합니다.
 
 
 ## 테스트 실행
