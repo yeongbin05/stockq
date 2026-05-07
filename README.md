@@ -244,22 +244,6 @@ python -m pytest -q
 `pytest.ini`는 일반 로컬 실행을 위해 `stockq.settings.local`을 기본값으로 사용하고, Docker CI에서는 `DJANGO_SETTINGS_MODULE=stockq.settings.ci`로 덮어써서 Postgres/Redis 기반 테스트를 실행합니다.
 
 
-## 테스트 실행
-
-CI와 동일한 Postgres/Redis 환경에서 테스트하려면 Docker Compose를 사용합니다.
-
-```bash
-docker compose -f docker-compose.ci.yml up --build --abort-on-container-exit --exit-code-from web
-```
-
-로컬 Python 환경에서 실행하려면 의존성을 설치한 뒤 pytest를 실행합니다.
-
-```bash
-pip install -r requirements-dev.txt
-python -m pytest -q
-```
-
-`pytest.ini`는 일반 로컬 실행을 위해 `stockq.settings.local`을 기본값으로 사용하고, Docker CI에서는 `DJANGO_SETTINGS_MODULE=stockq.settings.ci`로 덮어써서 Postgres/Redis 기반 테스트를 실행합니다.
 
 ## SLI / SLO
 
@@ -276,7 +260,7 @@ read API와 비동기 summary pipeline을 **측정 가능한 운영 지표**로 
 | Read API latency | `GET /api/stocks/summaries/`의 p95 latency | **p95 < 300ms** | route 기준 커스텀 histogram 메트릭으로 측정 |
 | Read API error rate | `GET /api/stocks/summaries/`의 5xx error rate | **< 1%** | route / method / status 라벨 기반 커스텀 counter 메트릭으로 측정 |
 | Read API request rate | `GET /api/stocks/summaries/`의 최근 5분 요청량 | 참고 지표 | read path 사용량과 트래픽 변화를 보기 위한 운영 지표 |
-| Read API successful requests | `GET /api/stocks/summaries/`의 최근 5분 성공 요청 수 | 참고 지표 | 실제 성공 호출 여부와 테스트 검증용 보조 지표 
+| Read API successful requests | `GET /api/stocks/summaries/`의 최근 5분 성공 요청 수 | 참고 지표 | 실제 성공 호출 여부와 테스트 검증용 보조 지표 |
 
 ### 2. Search API
 
@@ -285,7 +269,7 @@ read API와 비동기 summary pipeline을 **측정 가능한 운영 지표**로 
 | Search API latency | `GET /api/stocks/search/`의 p95 latency | **p95 < 300ms** | route 기준 커스텀 histogram 메트릭으로 측정 |
 | Search API error rate | `GET /api/stocks/search/`의 5xx error rate | **< 1%** | route / method / status 라벨 기반 커스텀 counter 메트릭으로 측정 |
 | Search API request rate | `GET /api/stocks/search/`의 최근 5분 요청량 | 참고 지표 | 검색 사용량과 트래픽 변화를 보기 위한 운영 지표 |
-| Search API successful requests | `GET /api/stocks/search/`의 최근 5분 성공 요청 수 | 참고 지표 | 실제 성공 호출 여부와 테스트 검증용 보조 지표 ||
+| Search API successful requests | `GET /api/stocks/search/`의 최근 5분 성공 요청 수 | 참고 지표 | 실제 성공 호출 여부와 테스트 검증용 보조 지표 |
 
 ### 3. Summary Pipeline
 
