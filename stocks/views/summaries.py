@@ -4,8 +4,8 @@ from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from stocks.models import FavoriteStock, Stock, Summary,Price
-from stocks.tasks import generate_summary_for_stock
+from stocks.models import FavoriteStock, Price, Stock, Summary
+
 
 def build_stock_payload(stock, latest_price=None, change_percent=None):
     return {
@@ -16,12 +16,16 @@ def build_stock_payload(stock, latest_price=None, change_percent=None):
         "change_percent": float(change_percent) if change_percent is not None else None,
     }
 
+
 class NewsSummaryViewSet(viewsets.ViewSet):
     """
-    뉴스 요약 관련 API
-    - GET /api/summaries/ : 내 요약 목록 조회
-    - POST /api/summaries/ : 요약 생성 요청
-    - GET /api/summaries/{symbol}/ : 특정 종목 요약 조회
+    저장된 뉴스 요약을 조회하는 read API입니다.
+
+    공식 요약 생성 흐름은 SummaryJob + dispatcher + Celery worker 파이프라인이며,
+    일반 사용자 요청 경로에서 LLM 요약 생성을 직접 실행하지 않습니다.
+
+    - GET /api/stocks/summaries/ : 내 관심종목의 저장된 요약 목록 조회
+    - GET /api/stocks/summaries/{symbol}/ : 특정 관심종목의 저장된 요약 조회
     """
 
     permission_classes = [IsAuthenticated]
@@ -68,67 +72,6 @@ class NewsSummaryViewSet(viewsets.ViewSet):
 
         return Response(
             {"date": today.isoformat(), "count": len(data), "summaries": data}
-        )
-
-    def create(self, request):
-        """요약 생성 요청"""
-        symbol = request.data.get("symbol")
-
-        # 1) 특정 종목 요약 생성
-        if symbol:
-            symbol = symbol.upper()
-
-            try:
-                stock = Stock.objects.get(symbol__iexact=symbol)
-
-                # 사용자가 해당 종목을 즐겨찾기에 등록했는지 확인
-                if not FavoriteStock.objects.filter(user=request.user, stock=stock).exists():
-                    return Response(
-                        {"error": "해당 종목이 즐겨찾기에 등록되지 않았습니다."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-
-                task = generate_summary_for_stock.delay(symbol)
-
-                return Response(
-                    {
-                        "message": "요약 생성 요청이 큐에 추가되었습니다.",
-                        "task_id": task.id,
-                        "symbol": symbol,
-                    },
-                    status=status.HTTP_202_ACCEPTED,
-                )
-
-            except Stock.DoesNotExist:
-                return Response(
-                    {"error": "해당 종목을 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND
-                )
-
-        # 2) 모든 관심종목(=내 즐겨찾기) 요약 생성
-        symbols = list(
-            FavoriteStock.objects.filter(user=request.user)
-            .select_related("stock")
-            .values_list("stock__symbol", flat=True)
-            .distinct()
-        )
-
-        if not symbols:
-            return Response(
-                {"error": "즐겨찾기 종목이 없습니다."}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        task_ids = []
-        for sym in symbols:
-            t = generate_summary_for_stock.delay(sym)
-            task_ids.append(t.id)
-
-        return Response(
-            {
-                "message": "모든 관심종목 요약 생성 요청이 큐에 추가되었습니다.",
-                "task_ids": task_ids,
-                "count": len(symbols),
-            },
-            status=status.HTTP_202_ACCEPTED,
         )
 
     def retrieve(self, request, symbol=None):
