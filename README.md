@@ -243,6 +243,8 @@ python -m pytest -q
 
 `pytest.ini`는 일반 로컬 실행을 위해 `stockq.settings.local`을 기본값으로 사용하고, Docker CI에서는 `DJANGO_SETTINGS_MODULE=stockq.settings.ci`로 덮어써서 Postgres/Redis 기반 테스트를 실행합니다.
 
+
+
 ## SLI / SLO
 
 StockQ는 단순히 기능이 동작하는 수준을 넘어서,  
