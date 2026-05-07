@@ -1,10 +1,10 @@
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q, Subquery
 from rest_framework import viewsets
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from stocks.models import Stock
+from stocks.models import FavoriteStock, Price, Stock
 from stocks.serializers import StockSearchSerializer
 
 
@@ -29,8 +29,24 @@ class StockSearchViewSet(viewsets.ViewSet):
         if not q:
             return Response([])
 
-        queryset = Stock.objects.filter(Q(symbol__icontains=q) | Q(name__icontains=q)).order_by(
-            "id"
+        latest_price_qs = Price.objects.filter(stock_id=OuterRef("pk")).order_by(
+            "-timestamp"
+        )
+        favorite_qs = FavoriteStock.objects.filter(
+            user=request.user,
+            stock_id=OuterRef("pk"),
+        )
+
+        queryset = (
+            Stock.objects.filter(Q(symbol__icontains=q) | Q(name__icontains=q))
+            .annotate(
+                is_favorite_annotated=Exists(favorite_qs),
+                latest_price_annotated=Subquery(latest_price_qs.values("price")[:1]),
+                latest_change_percent_annotated=Subquery(
+                    latest_price_qs.values("change_percent")[:1]
+                ),
+            )
+            .order_by("id")
         )
 
         paginator = self.pagination_class()
