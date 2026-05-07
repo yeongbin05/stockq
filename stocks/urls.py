@@ -27,7 +27,7 @@ urlpatterns = [
     path(
         "summaries/",
         NewsSummaryViewSet.as_view({"get": "list"}),
-        name="news-summary-list-create",
+        name="news-summary-list",
     ),
     path(
         "summaries/<str:symbol>/",

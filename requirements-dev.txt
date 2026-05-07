@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Test runner and Django pytest integration
+pytest==8.4.2
+pytest-django==4.11.1
+pytest-factoryboy==2.8.1
+factory_boy==3.3.3
