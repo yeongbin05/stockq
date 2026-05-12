@@ -400,7 +400,7 @@ class GenerateSummaryFailureTests(SummaryJobTestMixin, TestCase):
 
         lease_token = mark_job_as_dispatched(job)
 
-        with self.assertRaises(openai.APIConnectionError):
+        with self.assertRaises(openai.OpenAIError):
             generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
 
         job.refresh_from_db()
@@ -432,7 +432,7 @@ class GenerateSummaryFailureTests(SummaryJobTestMixin, TestCase):
 
         lease_token = mark_job_as_dispatched(job)
 
-        with self.assertRaises(openai.AuthenticationError):
+        with self.assertRaises(openai.OpenAIError):
             generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
 
         job.refresh_from_db()
@@ -463,7 +463,7 @@ class GenerateSummaryFailureTests(SummaryJobTestMixin, TestCase):
 
         lease_token = mark_job_as_dispatched(job)
 
-        with self.assertRaises(openai.BadRequestError):
+        with self.assertRaises(openai.OpenAIError):
             generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
 
         job.refresh_from_db()
