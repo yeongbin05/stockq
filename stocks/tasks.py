@@ -87,6 +87,7 @@ def _get_utc_range_from_kst_date(target_date=None):
 QUEUE_START_TIMEOUT = timedelta(minutes=2)
 RUNNING_EXEC_TIMEOUT = timedelta(minutes=10)
 MAX_STUCK_RECOVERY_RETRIES = 3
+MAX_SUMMARY_RETRIES = 3
 
 RETRY_BACKOFF_MINUTES = {
     0: 1,
@@ -97,6 +98,29 @@ RETRY_BACKOFF_MINUTES = {
 
 def _get_retry_backoff_minutes(retry_count: int) -> int:
     return RETRY_BACKOFF_MINUTES.get(retry_count, 15)
+
+
+def _classify_openai_failure(exc: Exception):
+    if isinstance(exc, openai.AuthenticationError):
+        return False, "openai_authentication_error"
+    if isinstance(exc, openai.PermissionDeniedError):
+        return False, "openai_permission_denied_error"
+    if isinstance(exc, openai.BadRequestError):
+        return False, "openai_bad_request_error"
+    if isinstance(exc, openai.APITimeoutError):
+        return True, "openai_api_timeout_error"
+    if isinstance(exc, openai.APIConnectionError):
+        return True, "openai_api_connection_error"
+    if isinstance(exc, openai.RateLimitError):
+        return True, "openai_rate_limit_error"
+    if isinstance(exc, openai.APIStatusError):
+        status_code = getattr(exc, "status_code", None)
+        if status_code in (408, 409, 429) or (status_code is not None and status_code >= 500):
+            return True, f"openai_retryable_status_{status_code}"
+        if status_code in (400, 401, 403, 404, 422):
+            return False, f"openai_non_retryable_status_{status_code}"
+        return False, f"openai_non_retryable_status_{status_code or 'unknown'}"
+    return False, "openai_non_retryable_unknown_error"
 
 
 @shared_task
@@ -508,7 +532,43 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         )
         t_llm_end = perf_counter()
     except Exception as e:
-        logger.error(f"OpenAI call failed: {e}")
+        retryable, reason = _classify_openai_failure(e)
+        error_message = f"{reason}: {str(e)}"
+        logger.error(f"OpenAI call failed: {error_message}")
+
+        if retryable and job.retry_count < MAX_SUMMARY_RETRIES:
+            now = timezone.now()
+            backoff_minutes = _get_retry_backoff_minutes(job.retry_count)
+            SummaryGenerationLog.objects.create(
+                stock=stock,
+                date=target_date,
+                before_input_tokens=before_input_tokens,
+                after_input_tokens=after_input_tokens,
+                raw_count=raw_count,
+                relevant_count=relevant_count,
+                status="retry_wait",
+                elapsed_ms=int((perf_counter() - t0) * 1000),
+                error_message=error_message,
+            )
+            SummaryJob.objects.filter(
+                id=job_id,
+                status=SummaryJob.Status.RUNNING,
+                lease_token=lease_token,
+            ).update(
+                status=SummaryJob.Status.RETRY_WAIT,
+                retry_count=job.retry_count + 1,
+                retry_at=now + timedelta(minutes=backoff_minutes),
+                started_at=None,
+                dispatched_at=None,
+                finished_at=None,
+                lease_token=None,
+                error_message=error_message,
+            )
+            return {"job_id": job_id, "status": "retry_wait", "reason": reason}
+
+        if retryable:
+            error_message = f"openai_max_retries_exceeded: {error_message}"
+
         SummaryGenerationLog.objects.create(
             stock=stock,
             date=target_date,
@@ -518,7 +578,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             relevant_count=relevant_count,
             status="failed",
             elapsed_ms=int((perf_counter() - t0) * 1000),
-            error_message=str(e),
+            error_message=error_message,
         )
         SummaryJob.objects.filter(
             id=job_id,
@@ -527,7 +587,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         ).update(
             status=SummaryJob.Status.FAILED,
             finished_at=timezone.now(),
-            error_message=str(e),
+            error_message=error_message,
         )
         raise
     t_parse_save_start = perf_counter()
