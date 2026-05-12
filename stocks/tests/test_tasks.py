@@ -1,4 +1,6 @@
 import json,uuid
+import httpx
+import openai
 from types import SimpleNamespace
 from unittest.mock import ANY, call, patch
 from uuid import uuid4
@@ -19,6 +21,7 @@ from stocks.tasks import (
     QUEUE_START_TIMEOUT,
     RUNNING_EXEC_TIMEOUT,
     MAX_STUCK_RECOVERY_RETRIES,
+    MAX_SUMMARY_RETRIES,
     dispatch_summary_jobs,
     fetch_favorite_news,
     generate_summary_for_stock,
@@ -230,6 +233,31 @@ class FetchFavoriteNewsJobCreationTests(TestCase):
 
 
 class GenerateSummaryFailureTests(SummaryJobTestMixin, TestCase):
+    def create_job_with_news(self, symbol="AAPL", name="Apple", retry_count=0):
+        stock, job = self.create_job(symbol=symbol, name=name)
+        job.retry_count = retry_count
+        job.save(update_fields=["retry_count"])
+
+        news = News.objects.create(
+            headline=f"{name} beats estimates",
+            url=f"https://example.com/{symbol.lower()}-news",
+            source="Example",
+            published_at=timezone.now(),
+            language="en",
+            raw_json={},
+        )
+        news.stocks.add(stock)
+        return stock, job
+
+    def openai_connection_error(self):
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        return openai.APIConnectionError(request=request)
+
+    def openai_status_error(self, error_cls, status_code, message):
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        response = httpx.Response(status_code=status_code, request=request)
+        return error_cls(message, response=response, body=None)
+
     @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
     @patch("stocks.tasks.openai.chat.completions.create")
     @patch("stocks.tasks.score_news_relevance")
@@ -321,6 +349,131 @@ class GenerateSummaryFailureTests(SummaryJobTestMixin, TestCase):
         self.assertIsNotNone(job.started_at)
         self.assertIsNotNone(job.finished_at)
         self.assertIn("openai temporary failure", job.error_message)
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
+    @patch("stocks.tasks.openai.chat.completions.create")
+    @patch("stocks.tasks.score_news_relevance")
+    def test_generate_summary_moves_job_to_retry_wait_when_openai_connection_fails(
+        self,
+        mock_score_news_relevance,
+        mock_openai_create,
+    ):
+        stock, job = self.create_job_with_news()
+
+        mock_score_news_relevance.return_value = (10, True, "matched")
+        mock_openai_create.side_effect = self.openai_connection_error()
+
+        lease_token = mark_job_as_dispatched(job)
+        result = generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        self.assertEqual(result["job_id"], job.id)
+        self.assertEqual(result["status"], "retry_wait")
+        self.assertEqual(result["reason"], "openai_api_connection_error")
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, SummaryJob.Status.RETRY_WAIT)
+        self.assertEqual(job.retry_count, 1)
+        self.assertIsNotNone(job.retry_at)
+        self.assertIsNone(job.lease_token)
+        self.assertIsNone(job.dispatched_at)
+        self.assertIsNone(job.started_at)
+        self.assertIsNone(job.finished_at)
+        self.assertIn("openai_api_connection_error", job.error_message)
+
+        log = SummaryGenerationLog.objects.get(stock=stock, status="retry_wait")
+        self.assertEqual(log.raw_count, 1)
+        self.assertEqual(log.relevant_count, 1)
+        self.assertIn("openai_api_connection_error", log.error_message)
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
+    @patch("stocks.tasks.openai.chat.completions.create")
+    @patch("stocks.tasks.score_news_relevance")
+    def test_generate_summary_fails_when_openai_connection_exceeds_max_retries(
+        self,
+        mock_score_news_relevance,
+        mock_openai_create,
+    ):
+        stock, job = self.create_job_with_news(retry_count=MAX_SUMMARY_RETRIES)
+
+        mock_score_news_relevance.return_value = (10, True, "matched")
+        mock_openai_create.side_effect = self.openai_connection_error()
+
+        lease_token = mark_job_as_dispatched(job)
+
+        with self.assertRaises(openai.APIConnectionError):
+            generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, SummaryJob.Status.FAILED)
+        self.assertEqual(job.retry_count, MAX_SUMMARY_RETRIES)
+        self.assertIsNotNone(job.finished_at)
+        self.assertIn("openai_max_retries_exceeded", job.error_message)
+        self.assertIn("openai_api_connection_error", job.error_message)
+
+        log = SummaryGenerationLog.objects.get(stock=stock, status="failed")
+        self.assertIn("openai_max_retries_exceeded", log.error_message)
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
+    @patch("stocks.tasks.openai.chat.completions.create")
+    @patch("stocks.tasks.score_news_relevance")
+    def test_generate_summary_fails_immediately_when_openai_authentication_fails(
+        self,
+        mock_score_news_relevance,
+        mock_openai_create,
+    ):
+        stock, job = self.create_job_with_news()
+
+        mock_score_news_relevance.return_value = (10, True, "matched")
+        mock_openai_create.side_effect = self.openai_status_error(
+            openai.AuthenticationError,
+            401,
+            "auth failed",
+        )
+
+        lease_token = mark_job_as_dispatched(job)
+
+        with self.assertRaises(openai.AuthenticationError):
+            generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, SummaryJob.Status.FAILED)
+        self.assertEqual(job.retry_count, 0)
+        self.assertIsNotNone(job.finished_at)
+        self.assertIn("openai_authentication_error", job.error_message)
+
+        log = SummaryGenerationLog.objects.get(stock=stock, status="failed")
+        self.assertIn("openai_authentication_error", log.error_message)
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
+    @patch("stocks.tasks.openai.chat.completions.create")
+    @patch("stocks.tasks.score_news_relevance")
+    def test_generate_summary_fails_immediately_when_openai_bad_request_fails(
+        self,
+        mock_score_news_relevance,
+        mock_openai_create,
+    ):
+        stock, job = self.create_job_with_news()
+
+        mock_score_news_relevance.return_value = (10, True, "matched")
+        mock_openai_create.side_effect = self.openai_status_error(
+            openai.BadRequestError,
+            400,
+            "bad request",
+        )
+
+        lease_token = mark_job_as_dispatched(job)
+
+        with self.assertRaises(openai.BadRequestError):
+            generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, SummaryJob.Status.FAILED)
+        self.assertEqual(job.retry_count, 0)
+        self.assertIsNotNone(job.finished_at)
+        self.assertIn("openai_bad_request_error", job.error_message)
+
+        log = SummaryGenerationLog.objects.get(stock=stock, status="failed")
+        self.assertIn("openai_bad_request_error", log.error_message)
 
 
 class FetchFavoriteNewsDuplicateJobTests(TestCase):
