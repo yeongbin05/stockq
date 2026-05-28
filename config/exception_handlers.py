@@ -32,4 +32,5 @@ def custom_exception_handler(exc, context):
                 "errors": response.data,
             }
 
+
     return response

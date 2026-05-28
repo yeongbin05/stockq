@@ -18,3 +18,4 @@ RUN python manage.py collectstatic --noinput || true
 
 # 운영 서버 실행 (Gunicorn 멀티 워커)
 CMD ["gunicorn", "stockq.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]
+

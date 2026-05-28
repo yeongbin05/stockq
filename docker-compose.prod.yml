@@ -79,3 +79,5 @@ services:
 volumes:
   db_data:
   redis_data:
+
+  

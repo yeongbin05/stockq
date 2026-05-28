@@ -32,3 +32,4 @@ class Subscription(models.Model):
         if self.end_date and self.end_date < timezone.now().date():
             return False
         return True
+
