@@ -10,8 +10,8 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from stocks.services import upsert_news_for_symbol  
 from stocks.models import Stock, News,Summary,SummaryGenerationLog,SummaryJob,Price
-from stocks.utils import score_news_relevance,wait_for_slot
-from stocks.rate_limit import get_openai_bucket
+from stocks.utils import score_news_relevance
+from stocks.rate_limit import get_finnhub_bucket, get_openai_bucket
 from time import perf_counter
 from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
@@ -31,12 +31,14 @@ def fetch_finnhub_quote(symbol):
     return response.json()
 
 def update_stock_quote(stock):
-    if not wait_for_slot("rate_limit:finnhub", capacity=5, rate=1):
-        logger.info(
-            "[update_stock_quote] symbol=%s status=rate_limited",
-            stock.symbol,
-        )
-        return None
+    if settings.FINNHUB_BUCKET_ENABLED:
+        bucket = get_finnhub_bucket()
+        if not bucket.wait_for_slot():
+            logger.info(
+                "[update_stock_quote] symbol=%s status=rate_limited",
+                stock.symbol,
+            )
+            return None
 
     data = fetch_finnhub_quote(stock.symbol)
 
