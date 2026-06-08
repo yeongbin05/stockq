@@ -1,7 +1,6 @@
 import hashlib
 import urllib.parse
 import os
-import time
 import redis
 
 def normalize_url(url: str) -> str:
@@ -22,72 +21,58 @@ def make_url_hash(url: str) -> str:
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 DJANGO_ENV = os.getenv("DJANGO_ENV", "dev")
 
-redis_client = None
-script_sha = None
-TOKEN_BUCKET_SCRIPT = None
-REDIS_AVAILABLE = False
 
-try:
-    redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-    redis_client.ping()
+def allow_request(
+    bucket: str,
+    capacity: int,
+    rate: float | None = None,
+    refill_rate: float | None = None,
+) -> bool:
+    """Compatibility wrapper around the shared RedisTokenBucket implementation."""
+    from stocks.rate_limit import RedisTokenBucket
 
-    BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-    LUA_PATH = os.path.join(BASE_DIR, "token_bucket.lua")
+    effective_rate = rate if rate is not None else refill_rate
+    if effective_rate is None:
+        raise ValueError("rate or refill_rate must be provided")
 
-    with open(LUA_PATH, "r", encoding="utf-8") as f:
-        TOKEN_BUCKET_SCRIPT = f.read()
+    limiter = RedisTokenBucket(
+        key=bucket,
+        capacity=capacity,
+        refill_rate_per_sec=effective_rate,
+        redis_url=REDIS_URL,
+    )
 
-    script_sha = redis_client.script_load(TOKEN_BUCKET_SCRIPT)
-    REDIS_AVAILABLE = True
-
-except Exception as e:
-    print(f"Redis 연결 실패: {e}")
-    redis_client = None
-    script_sha = None
-    TOKEN_BUCKET_SCRIPT = None
-    REDIS_AVAILABLE = False
-
-def allow_request(bucket: str, capacity: int, rate: int) -> bool:
-    global script_sha
-
-    if not REDIS_AVAILABLE:
+    try:
+        return limiter.consume(tokens=1).allowed
+    except redis.RedisError:
         if DJANGO_ENV == "dev":
             return True
         raise RuntimeError("Redis unavailable in non-dev environment")
 
-    now_us = int(time.time() * 1_000_000)
+
+def wait_for_slot(
+    bucket: str,
+    capacity: int,
+    rate: float,
+    timeout: float = 15.0,
+    interval: float = 0.2,
+) -> bool:
+    """Compatibility wrapper for callers that still pass bucket settings directly."""
+    from stocks.rate_limit import RedisTokenBucket
+
+    limiter = RedisTokenBucket(
+        key=bucket,
+        capacity=capacity,
+        refill_rate_per_sec=rate,
+        redis_url=REDIS_URL,
+    )
 
     try:
-        result = redis_client.evalsha(
-            script_sha,
-            1,
-            bucket,
-            str(capacity),
-            str(rate),
-            str(now_us),
-        )
-    except redis.exceptions.NoScriptError:
-        script_sha = redis_client.script_load(TOKEN_BUCKET_SCRIPT)
-        result = redis_client.evalsha(
-            script_sha,
-            1,
-            bucket,
-            str(capacity),
-            str(rate),
-            str(now_us),
-        )
-
-    return bool(result) and int(result[0]) == 1
-
-def wait_for_slot(bucket: str, capacity: int, rate: int, timeout: float = 15.0, interval: float = 0.2) -> bool:
-    start = time.time()
-
-    while time.time() - start < timeout:
-        if allow_request(bucket, capacity, rate):
+        return limiter.wait_for_slot(timeout=timeout, interval=interval)
+    except redis.RedisError:
+        if DJANGO_ENV == "dev":
             return True
-        time.sleep(interval)
-
-    return False
+        raise RuntimeError("Redis unavailable in non-dev environment")
 
 import spacy
 
