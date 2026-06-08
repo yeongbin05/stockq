@@ -13,7 +13,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 from .models import Stock, News, NewsStock,DailyUserNews
-from .utils import wait_for_slot,normalize_url, make_url_hash
+from .rate_limit import get_finnhub_bucket
+from .utils import normalize_url, make_url_hash
 
 FINNHUB_COMPANY_NEWS = "https://finnhub.io/api/v1/company-news"
 UTC = timezone.utc
@@ -134,15 +135,17 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
     t_total_start = perf_counter()
 
     t_wait_start = perf_counter()
-    if not wait_for_slot("rate_limit:finnhub", capacity=5, rate=1):
-        t_wait_end = perf_counter()
-        logger.info(
-            "[upsert_news_for_symbol_breakdown] symbol=%s wait_slot=%.3fs fetch=0.000s stock_get=0.000s news_upsert=0.000s link_upsert=0.000s total=%.3fs status=rate_limited",
-            symbol,
-            t_wait_end - t_wait_start,
-            t_wait_end - t_total_start,
-        )
-        raise Exception(f"Rate limit wait timeout: {symbol}")
+    if settings.FINNHUB_BUCKET_ENABLED:
+        bucket = get_finnhub_bucket()
+        if not bucket.wait_for_slot():
+            t_wait_end = perf_counter()
+            logger.info(
+                "[upsert_news_for_symbol_breakdown] symbol=%s wait_slot=%.3fs fetch=0.000s stock_get=0.000s news_upsert=0.000s link_upsert=0.000s total=%.3fs status=rate_limited",
+                symbol,
+                t_wait_end - t_wait_start,
+                t_wait_end - t_total_start,
+            )
+            raise Exception(f"Rate limit wait timeout: {symbol}")
     t_wait_end = perf_counter()
 
     t_fetch_start = perf_counter()
