@@ -217,9 +217,10 @@ XBENCH_SLOW_AGG_BUCKET_SECONDS = 10
 XBENCH_SLOW_AGG_BUCKET_COUNT = 60
 
 
-# settings/base.py
+# Token bucket capacity limits short bursts; refill rate controls sustained calls/sec.
+# Defaults are conservative initial values for the current small production setup.
 OPENAI_BUCKET_KEY = env("OPENAI_BUCKET_KEY", default="rate_limit:openai")
-OPENAI_BUCKET_CAPACITY = env.int("OPENAI_BUCKET_CAPACITY", default=3)
+OPENAI_BUCKET_CAPACITY = env.int("OPENAI_BUCKET_CAPACITY", default=2)
 OPENAI_BUCKET_REFILL_RATE = env.float("OPENAI_BUCKET_REFILL_RATE", default=1.0)
 OPENAI_BUCKET_REDIS_URL = env(
     "OPENAI_BUCKET_REDIS_URL",
@@ -228,9 +229,9 @@ OPENAI_BUCKET_REDIS_URL = env(
 
 OPENAI_BUCKET_ENABLED = env.bool("OPENAI_BUCKET_ENABLED", default=True)
 
-FINNHUB_BUCKET_ENABLED = env.bool("FINNHUB_BUCKET_ENABLED", default=False)
+FINNHUB_BUCKET_ENABLED = env.bool("FINNHUB_BUCKET_ENABLED", default=True)
 FINNHUB_BUCKET_KEY = env("FINNHUB_BUCKET_KEY", default="rate_limit:finnhub")
-FINNHUB_BUCKET_CAPACITY = env.int("FINNHUB_BUCKET_CAPACITY", default=60)
+FINNHUB_BUCKET_CAPACITY = env.int("FINNHUB_BUCKET_CAPACITY", default=2)
 FINNHUB_BUCKET_REFILL_RATE = env.float("FINNHUB_BUCKET_REFILL_RATE", default=1.0)
 
 FINNHUB_BUCKET_REDIS_URL = env(
