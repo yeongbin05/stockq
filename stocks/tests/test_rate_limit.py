@@ -6,7 +6,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from stocks.rate_limit import get_finnhub_bucket
 from stocks.services import (
     _finnhub_backoff_seconds,
-    _sleep_for_finnhub_429,
+    sleep_for_finnhub_429,
     fetch_company_news,
     upsert_news_for_symbol,
 )
@@ -97,14 +97,14 @@ class Finnhub429RetryTests(SimpleTestCase):
         mock_backoff_seconds,
         mock_sleep,
     ):
-        sleep_seconds = _sleep_for_finnhub_429(1)
+        sleep_seconds = sleep_for_finnhub_429(1)
 
         self.assertEqual(sleep_seconds, 2.25)
         mock_backoff_seconds.assert_called_once_with(1)
         mock_sleep.assert_called_once_with(2.25)
 
     @override_settings(FINNHUB_API_KEY="test-key")
-    @patch("stocks.services._sleep_for_finnhub_429", return_value=1.25)
+    @patch("stocks.services.sleep_for_finnhub_429", return_value=1.25)
     @patch("stocks.services.requests.get")
     def test_company_news_retries_after_429(
         self,
@@ -123,7 +123,7 @@ class Finnhub429RetryTests(SimpleTestCase):
         mock_sleep_for_429.assert_called_once_with(0)
 
     @override_settings(FINNHUB_API_KEY="test-key")
-    @patch("stocks.tasks._sleep_for_finnhub_429", return_value=1.25)
+    @patch("stocks.tasks.sleep_for_finnhub_429", return_value=1.25)
     @patch("stocks.tasks.requests.get")
     def test_quote_retries_after_429(
         self,
@@ -143,7 +143,7 @@ class Finnhub429RetryTests(SimpleTestCase):
         success.raise_for_status.assert_called_once_with()
 
     @override_settings(FINNHUB_API_KEY="test-key")
-    @patch("stocks.tasks._sleep_for_finnhub_429", return_value=1.25)
+    @patch("stocks.tasks.sleep_for_finnhub_429", return_value=1.25)
     @patch("stocks.tasks.requests.get")
     def test_quote_raises_after_last_429(
         self,
