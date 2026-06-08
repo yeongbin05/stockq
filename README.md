@@ -6,14 +6,11 @@
 
 | 구분 | 기술 |
 |---|---|
-| Backend | Python, Django, Django REST Framework |
-| Database | PostgreSQL |
-| Cache / Broker | Redis |
-| Async / Batch | Celery, Celery Beat |
-| External API | Finnhub API, OpenAI API |
-| Infra / Deploy | Docker, Docker Compose, Nginx, Gunicorn, AWS EC2, GitHub Actions |
-| Monitoring | Prometheus, Grafana, Slack Alert, Sentry |
-| Test / Performance | pytest, k6, Django Debug Toolbar |
+| Backend | Python, Django, DRF, Celery |
+| Database | PostgreSQL, Redis |
+| Infra | Docker, Nginx, AWS EC2|
+| Monitoring | Prometheus, Grafana |
+
 
 ## 아키텍처
 
