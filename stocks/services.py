@@ -53,6 +53,17 @@ def _date_range(days: int):
     to = now.strftime("%Y-%m-%d")
     return frm, to
 
+
+def _finnhub_backoff_seconds(attempt: int) -> float:
+    return (2 ** attempt) + random.uniform(0, 0.5)
+
+
+def _sleep_for_finnhub_429(attempt: int) -> float:
+    sleep_seconds = _finnhub_backoff_seconds(attempt)
+    time.sleep(sleep_seconds)
+    return sleep_seconds
+
+
 def fetch_company_news(symbol: str, days: int = 1, max_retries: int = 5):
     if not settings.FINNHUB_API_KEY:
         raise RuntimeError("FINNHUB_API_KEY not set")
@@ -82,18 +93,16 @@ def fetch_company_news(symbol: str, days: int = 1, max_retries: int = 5):
                 return r.json()
 
             if r.status_code == 429:
-                sleep_seconds = (2 ** attempt) + random.uniform(0, 0.5)
+                if attempt == max_retries - 1:
+                    raise Exception(f"Finnhub 429 Too Many Requests: {symbol}")
+
+                sleep_seconds = _sleep_for_finnhub_429(attempt)
                 logger.warning(
                     "[finnhub_429] symbol=%s attempt=%s sleep=%.2f",
                     symbol,
                     attempt + 1,
                     sleep_seconds,
                 )
-
-                if attempt == max_retries - 1:
-                    raise Exception(f"Finnhub 429 Too Many Requests: {symbol}")
-
-                time.sleep(sleep_seconds)
                 continue
 
             logger.error(

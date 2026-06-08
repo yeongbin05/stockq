@@ -8,7 +8,7 @@ from django.db.models import Q
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from stocks.services import upsert_news_for_symbol  
+from stocks.services import _sleep_for_finnhub_429, upsert_news_for_symbol
 from stocks.models import Stock, News,Summary,SummaryGenerationLog,SummaryJob,Price
 from stocks.utils import score_news_relevance
 from stocks.rate_limit import get_finnhub_bucket, get_openai_bucket
@@ -18,17 +18,34 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
-def fetch_finnhub_quote(symbol):
-    response = requests.get(
-        "https://finnhub.io/api/v1/quote",
-        params={
-            "symbol": symbol,
-            "token": settings.FINNHUB_API_KEY,
-        },
-        timeout=10,
-    )
-    response.raise_for_status()
-    return response.json()
+def fetch_finnhub_quote(symbol, max_retries: int = 5):
+    for attempt in range(max_retries):
+        response = requests.get(
+            "https://finnhub.io/api/v1/quote",
+            params={
+                "symbol": symbol,
+                "token": settings.FINNHUB_API_KEY,
+            },
+            timeout=10,
+        )
+
+        if response.status_code == 429:
+            if attempt == max_retries - 1:
+                raise Exception(f"Finnhub 429 Too Many Requests: {symbol}")
+
+            sleep_seconds = _sleep_for_finnhub_429(attempt)
+            logger.warning(
+                "[finnhub_429] symbol=%s attempt=%s sleep=%.2f",
+                symbol,
+                attempt + 1,
+                sleep_seconds,
+            )
+            continue
+
+        response.raise_for_status()
+        return response.json()
+
+    raise Exception(f"Finnhub quote fetch failed after retries: {symbol}")
 
 def update_stock_quote(stock):
     if settings.FINNHUB_BUCKET_ENABLED:
