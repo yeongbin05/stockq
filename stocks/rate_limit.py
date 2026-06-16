@@ -175,6 +175,21 @@ class RedisTokenBucket:
             retry_after_seconds=retry_after_seconds,
         )
 
+    def wait_for_slot(
+        self,
+        timeout: float = 15.0,
+        interval: float = 0.2,
+        tokens: int = 1,
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+            if self.consume(tokens=tokens).allowed:
+                return True
+            time.sleep(interval)
+
+        return False
+
 
 def get_openai_bucket() -> RedisTokenBucket:
     redis_url = (
@@ -185,7 +200,7 @@ def get_openai_bucket() -> RedisTokenBucket:
 
     return RedisTokenBucket(
         key=getattr(settings, "OPENAI_BUCKET_KEY", "rate_limit:openai"),
-        capacity=int(getattr(settings, "OPENAI_BUCKET_CAPACITY", 3)),
+        capacity=int(getattr(settings, "OPENAI_BUCKET_CAPACITY", 2)),
         refill_rate_per_sec=float(getattr(settings, "OPENAI_BUCKET_REFILL_RATE", 1)),
         redis_url=redis_url,
     )
@@ -200,7 +215,7 @@ def get_finnhub_bucket() -> RedisTokenBucket:
 
     return RedisTokenBucket(
         key=getattr(settings, "FINNHUB_BUCKET_KEY", "rate_limit:finnhub"),
-        capacity=int(getattr(settings, "FINNHUB_BUCKET_CAPACITY", 3)),
+        capacity=int(getattr(settings, "FINNHUB_BUCKET_CAPACITY", 2)),
         refill_rate_per_sec=float(getattr(settings, "FINNHUB_BUCKET_REFILL_RATE", 1)),
         redis_url=redis_url,
     )

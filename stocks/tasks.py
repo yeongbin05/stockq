@@ -1,42 +1,63 @@
-import openai,json,logging,uuid,requests
+import openai, json, logging, uuid, requests
 
 from celery import shared_task
-from datetime import datetime, timedelta,time, timezone as dt_timezone
+from datetime import datetime, timedelta, time, timezone as dt_timezone
 from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from stocks.services import upsert_news_for_symbol  
-from stocks.models import Stock, News,Summary,SummaryGenerationLog,SummaryJob,Price
-from stocks.utils import score_news_relevance,wait_for_slot
-from stocks.rate_limit import get_openai_bucket
+from stocks.services import sleep_for_finnhub_429, upsert_news_for_symbol
+from stocks.models import Stock, News, Summary, SummaryGenerationLog, SummaryJob, Price
+from stocks.utils import score_news_relevance
+from stocks.rate_limit import get_finnhub_bucket, get_openai_bucket
 from time import perf_counter
 from zoneinfo import ZoneInfo
+
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
-def fetch_finnhub_quote(symbol):
-    response = requests.get(
-        "https://finnhub.io/api/v1/quote",
-        params={
-            "symbol": symbol,
-            "token": settings.FINNHUB_API_KEY,
-        },
-        timeout=10,
-    )
-    response.raise_for_status()
-    return response.json()
+def fetch_finnhub_quote(symbol, max_retries: int = 5):
+    for attempt in range(max_retries):
+        response = requests.get(
+            "https://finnhub.io/api/v1/quote",
+            params={
+                "symbol": symbol,
+                "token": settings.FINNHUB_API_KEY,
+            },
+            timeout=10,
+        )
+
+        if response.status_code == 429:
+            if attempt == max_retries - 1:
+                raise Exception(f"Finnhub 429 Too Many Requests: {symbol}")
+
+            sleep_seconds = sleep_for_finnhub_429(attempt)
+            logger.warning(
+                "[finnhub_429] symbol=%s attempt=%s sleep=%.2f",
+                symbol,
+                attempt + 1,
+                sleep_seconds,
+            )
+            continue
+
+        response.raise_for_status()
+        return response.json()
+
+    raise Exception(f"Finnhub quote fetch failed after retries: {symbol}")
+
 
 def update_stock_quote(stock):
-    if not wait_for_slot("rate_limit:finnhub", capacity=5, rate=1):
-        logger.info(
-            "[update_stock_quote] symbol=%s status=rate_limited",
-            stock.symbol,
-        )
-        return None
+    if settings.FINNHUB_BUCKET_ENABLED:
+        bucket = get_finnhub_bucket()
+        if not bucket.wait_for_slot():
+            logger.info(
+                "[update_stock_quote] symbol=%s status=rate_limited",
+                stock.symbol,
+            )
+            return None
 
     data = fetch_finnhub_quote(stock.symbol)
 
@@ -58,9 +79,12 @@ def update_stock_quote(stock):
         timestamp=quote_time,
         defaults={
             "price": Decimal(str(current_price)),
-            "change_percent": Decimal(str(change_percent)) if change_percent is not None else None,
+            "change_percent": (
+                Decimal(str(change_percent)) if change_percent is not None else None
+            ),
         },
     )
+
 
 def _is_current_lease(job_id: int, lease_token: str) -> bool:
     return SummaryJob.objects.filter(
@@ -68,6 +92,7 @@ def _is_current_lease(job_id: int, lease_token: str) -> bool:
         status=SummaryJob.Status.RUNNING,
         lease_token=lease_token,
     ).exists()
+
 
 def _get_utc_range_from_kst_date(target_date=None):
     kst = ZoneInfo("Asia/Seoul")
@@ -115,7 +140,9 @@ def _classify_openai_failure(exc: Exception):
         return True, "openai_rate_limit_error"
     if isinstance(exc, openai.APIStatusError):
         status_code = getattr(exc, "status_code", None)
-        if status_code in (408, 409, 429) or (status_code is not None and status_code >= 500):
+        if status_code in (408, 409, 429) or (
+            status_code is not None and status_code >= 500
+        ):
             return True, f"openai_retryable_status_{status_code}"
         if status_code in (400, 401, 403, 404, 422):
             return False, f"openai_non_retryable_status_{status_code}"
@@ -134,17 +161,19 @@ def recover_stuck_summary_jobs():
         SummaryJob.objects.filter(
             status=SummaryJob.Status.RUNNING,
             finished_at__isnull=True,
-        ).filter(
+        )
+        .filter(
             Q(
                 started_at__isnull=True,
                 dispatched_at__isnull=False,
                 dispatched_at__lte=queue_start_deadline,
-            ) |
-            Q(
+            )
+            | Q(
                 started_at__isnull=False,
                 started_at__lte=running_exec_deadline,
             )
-        ).values("id", "retry_count", "lease_token")
+        )
+        .values("id", "retry_count", "lease_token")
     )
 
     recovered_job_ids = []
@@ -200,14 +229,9 @@ def recover_stuck_summary_jobs():
     }
 
 
-
 @shared_task(bind=True)
 def fetch_favorite_news(self, days: int = 1):
-    stocks = (
-        Stock.objects
-        .filter(favorited_by__isnull=False)
-        .distinct()
-    )
+    stocks = Stock.objects.filter(favorited_by__isnull=False).distinct()
 
     results = []
     success_symbols = []
@@ -239,8 +263,7 @@ def fetch_favorite_news(self, days: int = 1):
             results.append({"symbol": symbol, **res})
 
             has_new_input = (
-                res.get("created_news", 0) > 0 or
-                res.get("linked_pairs", 0) > 0
+                res.get("created_news", 0) > 0 or res.get("linked_pairs", 0) > 0
             )
 
             summary_exists_today = Summary.objects.filter(
@@ -285,17 +308,19 @@ def fetch_favorite_news(self, days: int = 1):
         "enqueued_symbols": enqueued_symbols,
     }
 
+
 def estimate_token_count(text: str) -> int:
     if not text:
         return 0
     return max(1, len(text) // 4)
 
-def _generate_summary_for_stock(job_id: int,lease_token: str):
+
+def _generate_summary_for_stock(job_id: int, lease_token: str):
     job = SummaryJob.objects.select_related("stock").get(id=job_id)
     stock = job.stock
     symbol = stock.symbol
     target_date = job.date
-   
+
     if not settings.OPENAI_API_KEY:
         logger.error("[generate_summary] OPENAI_API_KEY not set")
         SummaryJob.objects.filter(
@@ -310,7 +335,6 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         return {"error": "OpenAI API key not configured", "job_id": job_id}
 
     openai.api_key = settings.OPENAI_API_KEY
-   
 
     target_date, start_utc, end_utc = _get_utc_range_from_kst_date(target_date)
 
@@ -357,12 +381,14 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             company_name=stock.name,
             headline=news.headline,
         )
-        scored_news.append({
-            "news": news,
-            "relevance_score": score,
-            "is_relevant": is_relevant,
-            "reason": reason,
-        })
+        scored_news.append(
+            {
+                "news": news,
+                "relevance_score": score,
+                "is_relevant": is_relevant,
+                "reason": reason,
+            }
+        )
 
     relevant_news = [item for item in scored_news if item["is_relevant"]]
     relevant_count = len(relevant_news)
@@ -371,7 +397,6 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         f"[generate_summary] symbol={symbol} raw_count={raw_count} relevant_count={relevant_count}"
     )
 
-    
     t_prompt_start = perf_counter()
     kst = timezone.get_fixed_timezone(9 * 60)
 
@@ -430,7 +455,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         5) 가격/수급 정보가 없으면 "데이터 미제공"으로 넣는다.
         6) 한국어로만 작성한다.
         """
-    
+
     before_user_prompt = f"""📊 {target_date} {symbol} 뉴스 요약
 
     [입력]
@@ -441,7 +466,6 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
 
     위 뉴스들을 바탕으로 조건에 맞는 JSON 객체만 반환해주세요."""
 
-
     user_prompt = f"""📊 {target_date} {symbol} 뉴스 요약
 
     [입력]
@@ -451,8 +475,10 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
     {combined_text}
 
     위 뉴스들을 바탕으로 조건에 맞는 JSON 객체만 반환해주세요."""
-    
-    before_input_tokens = estimate_token_count(system_prompt + "\n" + before_user_prompt)
+
+    before_input_tokens = estimate_token_count(
+        system_prompt + "\n" + before_user_prompt
+    )
     after_input_tokens = estimate_token_count(system_prompt + "\n" + user_prompt)
     t_prompt_end = perf_counter()
 
@@ -479,7 +505,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
 
         logger.info(f"[generate_summary] {symbol}: 관련 뉴스가 없어 요약 생략")
         return {"message": "No relevant news found", "job_id": job_id}
-    
+
     t0 = perf_counter()
     if not _is_current_lease(job_id, lease_token):
         return {
@@ -492,7 +518,9 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             bucket_result = bucket.consume(tokens=1)
 
             if not bucket_result.allowed:
-                retry_at = timezone.now() + timedelta(seconds=bucket_result.retry_after_seconds)
+                retry_at = timezone.now() + timedelta(
+                    seconds=bucket_result.retry_after_seconds
+                )
 
                 logger.warning(
                     "[generate_summary] OpenAI bucket exceeded for %s. retry_after=%ss remaining=%s",
@@ -525,10 +553,10 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             model=settings.OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ],
             max_tokens=1200,
-            temperature=0.2
+            temperature=0.2,
         )
         t_llm_end = perf_counter()
     except Exception as e:
@@ -617,20 +645,15 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
             error_message=f"json_parse_failed: {str(e)}",
         )
         raise
-    
+
     if not _is_current_lease(job_id, lease_token):
         return {
             "job_id": job_id,
             "status": "stale_after_llm",
         }
 
-
     Summary.objects.update_or_create(
-        stock=stock,
-        date=target_date,
-        defaults={
-            "summary": summary_json
-        }
+        stock=stock, date=target_date, defaults={"summary": summary_json}
     )
 
     t_parse_save_end = perf_counter()
@@ -679,6 +702,7 @@ def _generate_summary_for_stock(job_id: int,lease_token: str):
         "relevant_count": relevant_count,
     }
 
+
 @shared_task(bind=True)
 def generate_summary_for_stock(self, job_id: int, lease_token: str):
     started = SummaryJob.objects.filter(
@@ -710,6 +734,7 @@ def generate_summary_for_stock(self, job_id: int, lease_token: str):
     )
     return _generate_summary_for_stock(job_id, lease_token)
 
+
 @shared_task
 def dispatch_summary_jobs(limit: int = 20):
     now = timezone.now()
@@ -739,11 +764,10 @@ def dispatch_summary_jobs(limit: int = 20):
             }
 
         jobs = list(
-            SummaryJob.objects
-            .select_for_update(skip_locked=True)
+            SummaryJob.objects.select_for_update(skip_locked=True)
             .filter(
-                Q(status=SummaryJob.Status.PENDING) |
-                Q(
+                Q(status=SummaryJob.Status.PENDING)
+                | Q(
                     status=SummaryJob.Status.RETRY_WAIT,
                     retry_at__lte=now,
                 )

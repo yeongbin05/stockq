@@ -10,17 +10,23 @@ from django.conf import settings
 from django.db import transaction
 import logging
 
-
 logger = logging.getLogger(__name__)
-from .models import Stock, News, NewsStock,DailyUserNews
-from .utils import wait_for_slot,normalize_url, make_url_hash
+from .models import Stock, News, NewsStock, DailyUserNews
+from .rate_limit import get_finnhub_bucket
+from .utils import normalize_url, make_url_hash
 
 FINNHUB_COMPANY_NEWS = "https://finnhub.io/api/v1/company-news"
 UTC = timezone.utc
 DROP_QUERY_KEYS = {
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "gclid", "fbclid"
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "gclid",
+    "fbclid",
 }
+
 
 def canonicalize_url(url: str) -> str:
     """스킴/호스트 소문자, 프래그먼트 제거, 추적 파라미터 제거, 쿼리 정렬"""
@@ -28,8 +34,11 @@ def canonicalize_url(url: str) -> str:
         return ""
     p = urlparse(url)
     # 쿼리 정렬 + 추적 파라미터 제거
-    q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
-         if k.lower() not in DROP_QUERY_KEYS]
+    q = [
+        (k, v)
+        for k, v in parse_qsl(p.query, keep_blank_values=True)
+        if k.lower() not in DROP_QUERY_KEYS
+    ]
     q.sort()
     new_query = urlencode(q)
     # 프래그먼트 제거
@@ -39,18 +48,31 @@ def canonicalize_url(url: str) -> str:
         p.path or "/",
         p.params,
         new_query,
-        ""  # fragment 제거
+        "",  # fragment 제거
     )
     return urlunparse(new_parts)
 
+
 def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
 
 def _date_range(days: int):
     now = datetime.now(UTC)
     frm = (now - timedelta(days=days)).strftime("%Y-%m-%d")
     to = now.strftime("%Y-%m-%d")
     return frm, to
+
+
+def _finnhub_backoff_seconds(attempt: int) -> float:
+    return (2**attempt) + random.uniform(0, 0.5)
+
+
+def sleep_for_finnhub_429(attempt: int) -> float:
+    sleep_seconds = _finnhub_backoff_seconds(attempt)
+    time.sleep(sleep_seconds)
+    return sleep_seconds
+
 
 def fetch_company_news(symbol: str, days: int = 1, max_retries: int = 5):
     if not settings.FINNHUB_API_KEY:
@@ -81,18 +103,16 @@ def fetch_company_news(symbol: str, days: int = 1, max_retries: int = 5):
                 return r.json()
 
             if r.status_code == 429:
-                sleep_seconds = (2 ** attempt) + random.uniform(0, 0.5)
+                if attempt == max_retries - 1:
+                    raise Exception(f"Finnhub 429 Too Many Requests: {symbol}")
+
+                sleep_seconds = sleep_for_finnhub_429(attempt)
                 logger.warning(
                     "[finnhub_429] symbol=%s attempt=%s sleep=%.2f",
                     symbol,
                     attempt + 1,
                     sleep_seconds,
                 )
-
-                if attempt == max_retries - 1:
-                    raise Exception(f"Finnhub 429 Too Many Requests: {symbol}")
-
-                time.sleep(sleep_seconds)
                 continue
 
             logger.error(
@@ -104,7 +124,7 @@ def fetch_company_news(symbol: str, days: int = 1, max_retries: int = 5):
             r.raise_for_status()
 
         except requests.RequestException as e:
-            sleep_seconds = (2 ** attempt) + random.uniform(0, 0.5)
+            sleep_seconds = (2**attempt) + random.uniform(0, 0.5)
             logger.warning(
                 "[finnhub_request_error] symbol=%s attempt=%s sleep=%.2f error=%s",
                 symbol,
@@ -120,10 +140,12 @@ def fetch_company_news(symbol: str, days: int = 1, max_retries: int = 5):
 
     raise Exception(f"Finnhub fetch failed after retries: {symbol}")
 
+
 from time import perf_counter
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 @transaction.atomic
 def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
@@ -134,15 +156,17 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
     t_total_start = perf_counter()
 
     t_wait_start = perf_counter()
-    if not wait_for_slot("rate_limit:finnhub", capacity=5, rate=1):
-        t_wait_end = perf_counter()
-        logger.info(
-            "[upsert_news_for_symbol_breakdown] symbol=%s wait_slot=%.3fs fetch=0.000s stock_get=0.000s news_upsert=0.000s link_upsert=0.000s total=%.3fs status=rate_limited",
-            symbol,
-            t_wait_end - t_wait_start,
-            t_wait_end - t_total_start,
-        )
-        raise Exception(f"Rate limit wait timeout: {symbol}")
+    if settings.FINNHUB_BUCKET_ENABLED:
+        bucket = get_finnhub_bucket()
+        if not bucket.wait_for_slot():
+            t_wait_end = perf_counter()
+            logger.info(
+                "[upsert_news_for_symbol_breakdown] symbol=%s wait_slot=%.3fs fetch=0.000s stock_get=0.000s news_upsert=0.000s link_upsert=0.000s total=%.3fs status=rate_limited",
+                symbol,
+                t_wait_end - t_wait_start,
+                t_wait_end - t_total_start,
+            )
+            raise Exception(f"Rate limit wait timeout: {symbol}")
     t_wait_end = perf_counter()
 
     t_fetch_start = perf_counter()
@@ -183,7 +207,9 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
 
         ts = item.get("datetime")
         try:
-            published_at = datetime.fromtimestamp(int(ts), tz=UTC) if ts else datetime.now(UTC)
+            published_at = (
+                datetime.fromtimestamp(int(ts), tz=UTC) if ts else datetime.now(UTC)
+            )
         except Exception:
             published_at = datetime.now(UTC)
 
@@ -191,7 +217,8 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
             "headline": item.get("headline") or "",
             "url": raw_url,
             "canonical_url": canonical,
-            "source": item.get("source") or (urlparse(canonical).netloc if canonical else None),
+            "source": item.get("source")
+            or (urlparse(canonical).netloc if canonical else None),
             "published_at": published_at,
             "language": item.get("lang", "en"),
             "raw_json": item,
@@ -200,7 +227,7 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
         t_news_upsert_start = perf_counter()
         news, created = News.objects.get_or_create(url_hash=url_hash, defaults=defaults)
         t_news_upsert_end = perf_counter()
-        news_upsert_elapsed += (t_news_upsert_end - t_news_upsert_start)
+        news_upsert_elapsed += t_news_upsert_end - t_news_upsert_start
 
         if created:
             created_news += 1
@@ -208,7 +235,7 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
         t_link_upsert_start = perf_counter()
         ns_created = NewsStock.objects.get_or_create(news=news, stock=stock)[1]
         t_link_upsert_end = perf_counter()
-        link_upsert_elapsed += (t_link_upsert_end - t_link_upsert_start)
+        link_upsert_elapsed += t_link_upsert_end - t_link_upsert_start
 
         if ns_created:
             linked_pairs += 1
@@ -230,7 +257,11 @@ def upsert_news_for_symbol(symbol: str, days: int = 1) -> dict:
         skipped,
     )
 
-    return {"created_news": created_news, "linked_pairs": linked_pairs, "skipped": skipped}
+    return {
+        "created_news": created_news,
+        "linked_pairs": linked_pairs,
+        "skipped": skipped,
+    }
 
 
 def store_daily_summaries_for_user(user, summaries_by_symbol: dict):
@@ -250,10 +281,7 @@ def store_daily_summaries_for_user(user, summaries_by_symbol: dict):
             continue
 
         obj, created = DailyUserNews.objects.get_or_create(
-            user=user,
-            date=today,
-            stock=stock,
-            defaults={"summary": summary}
+            user=user, date=today, stock=stock, defaults={"summary": summary}
         )
         if created:
             saved += 1
