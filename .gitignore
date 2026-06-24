@@ -288,3 +288,6 @@ pyrightconfig.json
 architecture.md
 
 d.zip
+.claude/
+install.cmd
+CLAUDE.md

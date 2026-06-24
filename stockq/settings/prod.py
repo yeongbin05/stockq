@@ -31,15 +31,16 @@ DATABASES = {
 }
 
 # 도커/배포용 Redis (docker-compose 서비스명이 'redis'라고 가정)
+# DB 0: Celery broker, DB 1: Celery result backend, DB 2: Django cache, DB 3: rate limit bucket
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": os.getenv("REDIS_URL", "redis://redis:6379/1"),
+        "LOCATION": os.getenv("DJANGO_CACHE_REDIS_URL", "redis://redis:6379/2"),
         "TIMEOUT": 60 * 10,
     }
 }
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/2")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/3")
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
 
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 

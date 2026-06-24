@@ -4,6 +4,7 @@ from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from stocks.cache import get_cached_summaries, set_cached_summaries, summary_cache_key, get_cached_summary, set_cached_summary
 from stocks.models import FavoriteStock, Price, Stock, Summary
 
 
@@ -31,7 +32,9 @@ class NewsSummaryViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
 
     def list(self, request):
-        today = django_timezone.now().date()
+        # TIME_ZONE=Asia/Seoul이어도 now().date()는 UTC 기준 날짜라 KST 자정 전후로
+        # 어제/오늘이 어긋날 수 있다. localdate()로 KST 기준 날짜를 명시적으로 구한다.
+        today = django_timezone.localdate()
         latest_price_qs = Price.objects.filter(
             stock_id=OuterRef("stock_id")
         ).order_by("-timestamp")
@@ -47,16 +50,28 @@ class NewsSummaryViewSet(viewsets.ViewSet):
         )
         stock_ids = [f.stock_id for f in favs]
 
-        summaries = (
-            Summary.objects.filter(stock_id__in=stock_ids, date=today)
-            .select_related("stock")
-            .only("stock_id", "summary", "date")
-        )
-        summary_map = {s.stock_id: s for s in summaries}
+        cache_keys_by_stock_id = {
+            stock_id: summary_cache_key(stock_id, today) for stock_id in stock_ids
+        }
+        summary_map = get_cached_summaries(cache_keys_by_stock_id)
+
+        missing_stock_ids = [sid for sid in stock_ids if sid not in summary_map]
+        if missing_stock_ids:
+            fetched = {
+                s.stock_id: s.summary
+                for s in Summary.objects.filter(
+                    stock_id__in=missing_stock_ids, date=today
+                ).only("stock_id", "summary", "date")
+            }
+            if fetched:
+                set_cached_summaries(
+                    (stock_id, today, summary) for stock_id, summary in fetched.items()
+                )
+            summary_map.update(fetched)
 
         data = []
         for f in favs:
-            s = summary_map.get(f.stock_id)
+            summary = summary_map.get(f.stock_id)
             data.append(
                 {
                     "stock": build_stock_payload(
@@ -65,8 +80,8 @@ class NewsSummaryViewSet(viewsets.ViewSet):
                         change_percent=f.latest_change_percent,
                     ),
                     "date": today.isoformat(),
-                    "summary": s.summary if s else None,
-                    "summary_exists": bool(s),
+                    "summary": summary,
+                    "summary_exists": summary is not None,
                 }
             )
 
@@ -81,7 +96,8 @@ class NewsSummaryViewSet(viewsets.ViewSet):
             )
 
         symbol = symbol.upper()
-        today = django_timezone.now().date()
+        # list()와 동일하게 KST 기준 날짜를 사용한다 (위 주석 참고).
+        today = django_timezone.localdate()
 
         latest_price_qs = Price.objects.filter(
             stock_id=OuterRef("pk")
@@ -108,7 +124,22 @@ class NewsSummaryViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # 3) 오늘 Summary 조회
+        # 3) 오늘 Summary 조회 (cache-aside: hit이면 DB 조회 없이 반환)
+        cached_summary = get_cached_summary(stock.id, today)
+        if cached_summary is not None:
+            return Response(
+                {
+                    "stock": build_stock_payload(
+                        stock,
+                        latest_price=stock.latest_price,
+                        change_percent=stock.latest_change_percent,
+                    ),
+                    "date": today.isoformat(),
+                    "summary": cached_summary,
+                    "summary_exists": True,
+                }
+            )
+
         s = Summary.objects.filter(stock=stock, date=today).only("summary", "date").first()
         if not s:
             return Response(
@@ -124,6 +155,8 @@ class NewsSummaryViewSet(viewsets.ViewSet):
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        set_cached_summary(stock.id, today, s.summary)
 
         return Response(
             {
