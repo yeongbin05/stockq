@@ -8,6 +8,7 @@ from django.db.models import Q
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from stocks.cache import set_cached_summary
 from stocks.services import sleep_for_finnhub_429, upsert_news_for_symbol
 from stocks.models import Stock, News, Summary, SummaryGenerationLog, SummaryJob, Price
 from stocks.utils import score_news_relevance
@@ -652,22 +653,59 @@ def _generate_summary_for_stock(job_id: int, lease_token: str):
             "status": "stale_after_llm",
         }
 
-    Summary.objects.update_or_create(
-        stock=stock, date=target_date, defaults={"summary": summary_json}
-    )
+    t1 = perf_counter()
+
+    # Summary 저장과 SummaryJob의 SUCCESS 전환은 하나의 정합성 단위다 — 둘 중
+    # 하나라도 실패하면 "Job은 SUCCESS인데 Summary가 없다"거나 그 반대인 상태가
+    # 생길 수 있으므로 같은 atomic 블록으로 묶는다. transaction.on_commit도 이
+    # 블록 안에서 등록해야 "이 블록이 실제로 커밋된 후"에만 캐시가 갱신된다.
+    # (atomic 블록 밖에서 update_or_create()만 단독 호출하면 그 자체로 즉시
+    #  커밋되어 버려서, 이후의 on_commit은 활성 트랜잭션이 없어 그 자리에서
+    #  바로 실행되는 일반 호출과 다를 게 없어진다 — 이전에 있던 버그.)
+    #
+    # SummaryGenerationLog는 의도적으로 이 블록 밖에서 best-effort로 기록한다.
+    # 로그는 운영 관찰/디버깅용 보조 데이터이고 Summary/Job 상태의 일부가
+    # 아니므로, 로그 INSERT 실패가 이미 정상적으로 생성된 Summary와 Job
+    # SUCCESS 상태까지 롤백시키는 것은 과도한 결합이다. 로그 기록 실패는
+    # task의 성공/실패에 영향을 주지 않는다.
+    with transaction.atomic():
+        Summary.objects.update_or_create(
+            stock=stock, date=target_date, defaults={"summary": summary_json}
+        )
+
+        SummaryJob.objects.filter(
+            id=job_id,
+            status=SummaryJob.Status.RUNNING,
+            lease_token=lease_token,
+        ).update(
+            status=SummaryJob.Status.SUCCESS,
+            finished_at=timezone.now(),
+            error_message="",
+        )
+
+        transaction.on_commit(
+            lambda: set_cached_summary(stock.id, target_date, summary_json)
+        )
 
     t_parse_save_end = perf_counter()
-    t1 = perf_counter()
-    SummaryGenerationLog.objects.create(
-        stock=stock,
-        date=target_date,
-        before_input_tokens=before_input_tokens,
-        after_input_tokens=after_input_tokens,
-        raw_count=raw_count,
-        relevant_count=relevant_count,
-        status="success",
-        elapsed_ms=int((t1 - t0) * 1000),
-    )
+
+    try:
+        SummaryGenerationLog.objects.create(
+            stock=stock,
+            date=target_date,
+            before_input_tokens=before_input_tokens,
+            after_input_tokens=after_input_tokens,
+            raw_count=raw_count,
+            relevant_count=relevant_count,
+            status="success",
+            elapsed_ms=int((t1 - t0) * 1000),
+        )
+    except Exception:
+        logger.exception(
+            "[generate_summary] failed to write SummaryGenerationLog job_id=%s symbol=%s",
+            job_id,
+            symbol,
+        )
 
     total_elapsed = t_parse_save_end - t_news_query_start
 
@@ -683,15 +721,6 @@ def _generate_summary_for_stock(job_id: int, lease_token: str):
         total_elapsed,
         raw_count,
         relevant_count,
-    )
-    SummaryJob.objects.filter(
-        id=job_id,
-        status=SummaryJob.Status.RUNNING,
-        lease_token=lease_token,
-    ).update(
-        status=SummaryJob.Status.SUCCESS,
-        finished_at=timezone.now(),
-        error_message="",
     )
     return {
         "job_id": job_id,

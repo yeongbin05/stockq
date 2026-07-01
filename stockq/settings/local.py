@@ -21,10 +21,11 @@ DATABASES = {
 }
 
 # 로컬 Redis
+# DB 0: Celery broker, DB 1: Celery result backend, DB 2: Django cache, DB 3: rate limit bucket
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": "redis://redis:6379/1",
+        "LOCATION": "redis://redis:6379/2",
         "TIMEOUT": 600,
     }
 }

@@ -2,7 +2,7 @@ import json,uuid
 import httpx
 import openai
 from types import SimpleNamespace
-from unittest.mock import ANY, call, patch
+from unittest.mock import ANY, Mock, call, patch
 from uuid import uuid4
 from datetime import timedelta
 from django.contrib.auth import get_user_model
@@ -882,5 +882,188 @@ class GenerateSummaryLeaseStateTests(SummaryJobTestMixin, TestCase):
         self.assertIsNone(job.finished_at)
 
 
+LOCMEM_CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    }
+}
 
+
+@override_settings(CACHES=LOCMEM_CACHES)
+class GenerateSummaryCacheUpdateTests(SummaryJobTestMixin, TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
+    @patch("stocks.tasks.openai.chat.completions.create")
+    @patch("stocks.tasks.score_news_relevance")
+    def test_generate_summary_updates_cache_only_after_db_commit(
+        self,
+        mock_score_news_relevance,
+        mock_openai_create,
+    ):
+        from stocks.cache import get_cached_summary
+
+        stock, job = self.create_job(symbol="AAPL", name="Apple")
+
+        news = News.objects.create(
+            headline="Apple beats estimates",
+            url="https://example.com/aapl-news",
+            source="Example",
+            published_at=timezone.now(),
+            language="en",
+            raw_json={},
+        )
+        news.stocks.add(stock)
+
+        mock_score_news_relevance.return_value = (10, True, "matched")
+
+        response_payload = {
+            "ticker": "AAPL",
+            "date": str(job.date),
+            "news_summary": ["Apple beat earnings expectations."],
+            "price_and_volume": "Stock moved on earnings sentiment.",
+            "overall_sentiment": {
+                "sentiment": "긍정",
+                "rationale": "Strong earnings and positive guidance.",
+                "confidence": 87,
+            },
+        }
+        mock_openai_create.return_value = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=json.dumps(response_payload))
+                )
+            ]
+        )
+
+        lease_token = mark_job_as_dispatched(job)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            result = generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        self.assertEqual(result["status"], "success")
+
+        summary = Summary.objects.get(stock=stock, date=job.date)
+        self.assertEqual(
+            get_cached_summary(stock.id, job.date),
+            summary.summary,
+        )
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
+    @patch("stocks.tasks.set_cached_summary")
+    def test_generate_summary_no_news_branch_does_not_touch_cache(
+        self,
+        mock_set_cached_summary,
+    ):
+        stock, job = self.create_job(symbol="AAPL", name="Apple")
+
+        lease_token = mark_job_as_dispatched(job)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        mock_set_cached_summary.assert_not_called()
+
+
+@override_settings(CACHES=LOCMEM_CACHES)
+class GenerateSummaryCacheRollbackTests(SummaryJobTestMixin, TestCase):
+    """
+    transaction.on_commit은 등록 시점에 활성 atomic 블록이 있어야만
+    "커밋 후 실행"이라는 의미를 갖는다. 이 테스트는 Summary 저장 직후,
+    같은 atomic 블록 안에서 SummaryJob을 SUCCESS로 갱신하는 단계가
+    실패하는 상황을 강제로 만들어:
+
+    1) Summary 저장이 롤백되고
+    2) on_commit으로 등록된 캐시 갱신(set_cached_summary)이 아예 실행되지 않는지
+
+    를 검증한다. 이게 깨지면 "DB에는 없는데 캐시에는 있는" 정합성 깨짐이 생긴다.
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+
+    @override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-test", OPENAI_BUCKET_ENABLED=False)
+    @patch("stocks.tasks.set_cached_summary")
+    @patch("stocks.tasks.openai.chat.completions.create")
+    @patch("stocks.tasks.score_news_relevance")
+    def test_set_cached_summary_is_not_called_when_transaction_rolls_back(
+        self,
+        mock_score_news_relevance,
+        mock_openai_create,
+        mock_set_cached_summary,
+    ):
+        from stocks.cache import get_cached_summary
+
+        stock, job = self.create_job(symbol="AAPL", name="Apple")
+
+        news = News.objects.create(
+            headline="Apple beats estimates",
+            url="https://example.com/aapl-news",
+            source="Example",
+            published_at=timezone.now(),
+            language="en",
+            raw_json={},
+        )
+        news.stocks.add(stock)
+
+        mock_score_news_relevance.return_value = (10, True, "matched")
+
+        response_payload = {
+            "ticker": "AAPL",
+            "date": str(job.date),
+            "news_summary": ["Apple beat earnings expectations."],
+            "price_and_volume": "Stock moved on earnings sentiment.",
+            "overall_sentiment": {
+                "sentiment": "긍정",
+                "rationale": "Strong earnings and positive guidance.",
+                "confidence": 87,
+            },
+        }
+        mock_openai_create.return_value = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=json.dumps(response_payload))
+                )
+            ]
+        )
+
+        lease_token = mark_job_as_dispatched(job)
+
+        original_filter = SummaryJob.objects.filter
+
+        def filter_side_effect(*args, **kwargs):
+            queryset = original_filter(*args, **kwargs)
+            # SUCCESS 전환 호출만 표적으로 한다: 작업 시작 표시(started_at__isnull)나
+            # _is_current_lease()의 .exists() 호출과는 kwargs 구성이 다르고,
+            # 이 mock은 .update()에만 영향을 주므로 .exists() 호출에는 안전하다.
+            is_success_transition_call = (
+                kwargs.get("status") == SummaryJob.Status.RUNNING
+                and "lease_token" in kwargs
+                and "started_at__isnull" not in kwargs
+            )
+            if is_success_transition_call:
+                queryset.update = Mock(side_effect=RuntimeError("forced failure before commit"))
+            return queryset
+
+        with patch(
+            "stocks.tasks.SummaryJob.objects.filter",
+            side_effect=filter_side_effect,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                with self.assertRaisesMessage(RuntimeError, "forced failure before commit"):
+                    generate_summary_for_stock.apply(args=(job.id, lease_token)).get()
+
+        # 1) Summary 저장도 같은 atomic 블록에 있었으므로 함께 롤백되어야 한다.
+        self.assertEqual(
+            Summary.objects.filter(stock=stock, date=job.date).count(), 0
+        )
+
+        # 2) on_commit 콜백(캐시 갱신)은 롤백된 트랜잭션에서는 절대 실행되지 않아야 한다.
+        mock_set_cached_summary.assert_not_called()
+        self.assertIsNone(get_cached_summary(stock.id, job.date))
 
